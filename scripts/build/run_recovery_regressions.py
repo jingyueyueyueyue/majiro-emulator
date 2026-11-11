@@ -26,7 +26,7 @@ SUITES=(
     "test_android_movie_compile","test_text_mode","test_translation_service",
     "test_translation_live_controls","test_online_voice_dialogue",
     "test_touch_callback_coordinates","test_page_image_loading","test_png_mask_resources",
-    "test_patch_archive_frames","test_patch_manifest","test_engine_format_recognition",
+    "test_patch_archive_frames","test_patch_manifest","test_archive_layers","test_engine_format_recognition",
     "test_configuration_quotes","test_optional_argument_slots","test_expired_handles",
     "test_native_pixels","test_text_raster","test_ui_images","test_proofread",
     "test_graphics_checkpoint","test_drawmodes","test_original_blend","test_original_swap",

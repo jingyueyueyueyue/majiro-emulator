@@ -38,6 +38,7 @@ def main():
         ("native_image_tests", ["scripts/analysis/test_player_images.py"]),
         ("raw_patch_loader", ["scripts/analysis/test_raw_player_patch.py"]),
         ("patch_manifest", ["scripts/analysis/test_patch_manifest.py"]),
+        ("archive_layers", ["scripts/analysis/test_archive_layers.py"]),
         ("configuration_quotes", ["scripts/analysis/test_configuration_quotes.py"]),
         ("game_icons", ["scripts/analysis/test_game_icons.py"]),
         ("online_translation", ["scripts/analysis/test_online_translation.py"]),

@@ -14,9 +14,10 @@ final class PatchManifest {
     }
     final ArrayList<Layer> layers=new ArrayList<Layer>();
     final ArrayList<String> archives=new ArrayList<String>();
+    final ArrayList<String> localArchives=new ArrayList<String>();
     final ArrayList<String> imageArchives=new ArrayList<String>();
     String rawMetadata="",textPath="",textKind="",imageDirectory="",fontDirectory="patches/fonts";
-    boolean legacy;
+    boolean legacy,explicit;
 
     static String path(String value) {
         if(value==null||value.length()==0||value.length()>1024||!value.startsWith("patches/")
@@ -50,6 +51,19 @@ final class PatchManifest {
         Object schema=data.get("schema");
         if(!(schema instanceof Number)||((Number)schema).doubleValue()!=1)
             throw new IllegalArgumentException("unsupported patch manifest schema");
+        result.explicit=true;
+        JSONArray archives=data.optJSONArray("archives");
+        HashSet<String> archiveNames=new HashSet<String>();
+        if(archives!=null){
+            if(archives.length()>128)throw new IllegalArgumentException("patch archive count");
+            for(int i=0;i<archives.length();++i){
+                String archive=path(archives.getString(i));
+                if(!archive.toLowerCase(Locale.ROOT).endsWith(".arc")
+                        ||!archiveNames.add(archive.toLowerCase(Locale.ROOT)))
+                    throw new IllegalArgumentException("invalid or duplicate patch archive");
+                result.localArchives.add(archive);
+            }
+        }
         JSONArray images=data.optJSONArray("image_archives");
         HashSet<String> imageNames=new HashSet<String>();
         if(images!=null){
@@ -78,17 +92,7 @@ final class PatchManifest {
                 result.layers.add(new Layer(directory,kind));pinned|=kind.equals("pinned_raw_patch");
             }
         }
-        JSONArray archives=data.optJSONArray("archives");seen.clear();
-        if(archives!=null){
-            if(archives.length()>128)throw new IllegalArgumentException("patch archive count");
-            for(int i=0;i<archives.length();++i){
-                String archive=path(archives.getString(i));
-                if(!archive.toLowerCase(Locale.ROOT).endsWith(".arc")
-                        ||!seen.add(archive.toLowerCase(Locale.ROOT)))
-                    throw new IllegalArgumentException("invalid or duplicate patch archive");
-                result.archives.add(archive);
-            }
-        }
+        result.archives.addAll(result.localArchives);
         result.rawMetadata=optionalPath(data,"raw_metadata");
         if(pinned&&result.rawMetadata.isEmpty())throw new IllegalArgumentException("pinned patch metadata is missing");
         JSONObject text=data.optJSONObject("text_adapter");

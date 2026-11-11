@@ -22,6 +22,7 @@ public final class PatchManifestChecks {
             .put("image_directory","patches/custom/images").put("font_directory","patches/common/fonts");
         PatchManifest parsed=PatchManifest.parse(source.toString(),true);
         check(!parsed.legacy&&parsed.layers.size()==2,"explicit manifest");
+        check(parsed.explicit&&parsed.localArchives.equals(parsed.archives),"local archive declarations retained");
         check(parsed.layerRows()[0].equals("pinned_raw_patch\tpatches/任意/scenario"),"first layer priority");
         check(parsed.layerRows()[1].equals("source_mjo\tpatches/other/source"),"second layer priority");
         check(parsed.archives.get(0).equals("patches/a/20.arc")&&parsed.archives.get(1).equals("patches/z/99.arc"),
@@ -38,6 +39,8 @@ public final class PatchManifestChecks {
             check(original.layers.isEmpty()&&original.archives.isEmpty()&&original.textPath.isEmpty()
                 &&original.rawMetadata.isEmpty()&&!original.legacy,"non-local does not mount script or text translation");
             check(original.imageArchives.size()==(value==null?0:2),"declared images independent of text mode");
+            check(original.localArchives.size()==(value==null?0:2),
+                "non-local retains declarations for duplicate detection without mounting scripts");
         }
         check(PatchManifest.parse(source.toString(),false).imageArchives.get(0).equals("patches/z/99.arc"),
             "image archive priority preserved");

@@ -52,6 +52,7 @@ public final class GameBridge {
     private static volatile String mediaError;
     private static final HashMap<String, HashMap<String, String>> directories =
         new HashMap<String, HashMap<String, String>>();
+    private static final HashMap<String,String> duplicateArchives = new HashMap<String,String>();
     private static final HashMap<String, MediaPlayer> players = new HashMap<String, MediaPlayer>();
     private static final HashMap<String, MediaPlayer> nextPlayers = new HashMap<String, MediaPlayer>();
     private static final HashMap<String, File> mediaFiles = new HashMap<String, File>();
@@ -106,6 +107,7 @@ public final class GameBridge {
             if(!child)throw new SecurityException("game root is outside the selected folder");
         }
         directories.clear();
+        duplicateArchives.clear();
         gameButtons.set(0);
         GameWindowCommands.reset();
         GameTouchKeys.reset();
@@ -260,15 +262,43 @@ public final class GameBridge {
         for(String name:patch.imageArchives)if(!paths.contains(name)){
             paths.add(name);imageOnly.add(name);
         }
-        if(patch.legacy){
+        ArrayList<String> localArchives=new ArrayList<String>(patch.localArchives);
+        for(String name:patch.imageArchives)if(!localArchives.contains(name))localArchives.add(name);
+        if(!patch.explicit){
             Uri overlay=resolve("patches/local/archives");
             ArrayList<String> names=new ArrayList<String>();
             if(overlay!=null)for(String name:children(DocumentsContract.getDocumentId(overlay)).keySet())
                 if(name.endsWith(".arc"))names.add("patches/local/archives/"+name);
-            java.util.Collections.sort(names,java.util.Collections.reverseOrder());paths.addAll(names);
+            java.util.Collections.sort(names,java.util.Collections.reverseOrder());
+            localArchives.addAll(names);
+            if(patch.legacy)paths.addAll(names);
         }
         ArrayList<String> base=new ArrayList<String>(children(rootId).keySet());
-        java.util.Collections.sort(base,java.util.Collections.reverseOrder());paths.addAll(base);
+        java.util.Collections.sort(base,java.util.Collections.reverseOrder());
+        java.util.LinkedHashMap<String,String> duplicates=ArchiveLayerPolicy.duplicates(base,localArchives,
+            new ArchiveLayerPolicy.Resources(){
+                @Override public long size(String path) throws Exception {
+                    Uri uri=resolve(path);
+                    if(uri==null)return -1;
+                    try(ParcelFileDescriptor fd=context.getContentResolver().openFileDescriptor(uri,"r")){
+                        if(fd==null)throw new IllegalStateException("cannot open archive");
+                        long length=fd.getStatSize();
+                        return length>=0?length:Os.lseek(fd.getFileDescriptor(),0,OsConstants.SEEK_END);
+                    }
+                }
+                @Override public InputStream open(String path) throws Exception {
+                    Uri uri=resolve(path);
+                    return uri==null?null:context.getContentResolver().openInputStream(uri);
+                }
+            });
+        duplicateArchives.clear();
+        for(java.util.Map.Entry<String,String> entry:duplicates.entrySet())
+            duplicateArchives.put(key(entry.getKey()),entry.getValue());
+        for(String name:base){
+            if(duplicates.containsKey(name)){
+                DiagnosticLog.write("archive","base copy skipped: "+name+" = "+duplicates.get(name));
+            }else paths.add(name);
+        }
         for (String name : paths) {
             if (!name.endsWith(".arc") || name.equals("savedata.arc")) continue;
             Uri uri = resolve(name);
@@ -283,6 +313,10 @@ public final class GameBridge {
         return rows.toArray(new String[rows.size()]);
     }
     public static String openArchive(String name) throws Exception{
+        if(duplicateArchives.containsKey(key(name))){
+            DiagnosticLog.write("archive","duplicate local patch registration skipped: "+name);
+            return "ABSENT";
+        }
         Uri uri=resolve(name);
         if(uri==null){
             String stem=name.toLowerCase(Locale.ROOT).endsWith(".arc")?name.substring(0,name.length()-4):name;
