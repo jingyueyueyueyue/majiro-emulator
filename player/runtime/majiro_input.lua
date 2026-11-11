@@ -54,7 +54,7 @@ function M.install(define,state,options,screen)
       return 0
     end
     local callbacks={}
-    local chapter_menu=false
+    local chapter_menu
     local reading_before=state.reading_wait
     local active
     local area_x=input.x-(t.area_offset_x or 0)
@@ -133,10 +133,22 @@ function M.install(define,state,options,screen)
       local root=vm.frames[1]
       if slot==2 and not state.chapter_menu_active and root and
          root.script.name:match('^sub_title')and vm:frame().script.name=='buttonmenu.mjo'then
-        -- Chapter menus used their default right callback as a direct 99
-        -- (title) selection. Keep title return behind explicit menu controls.
-        chapter_menu=true;hash=nil
-        input.buttons=0;input.pressed[13],input.pressed[32]=nil,nil
+        -- Ruri's chapter right callback selects title directly. Its pause
+        -- wrapper can keep that return behind explicit menu controls, but
+        -- other games also use sub_title/buttonmenu with different functions.
+        local script=vm.scripts['pausemenu.mjo']
+        if not script and options.resource_names and options.resource_names['pausemenu.mjo']then
+          script=vm:load('pausemenu.mjo')
+        end
+        for _,fn in ipairs(script and script.functions or{})do
+          if fn[1]==3638675204 then
+            chapter_menu={script=script,offset=fn[2]};break
+          end
+        end
+        if chapter_menu then
+          hash=nil
+          input.buttons=0;input.pressed[13],input.pressed[32]=nil,nil
+        end
       end
       if hash and hash~=0 then
         callbacks[#callbacks+1]={hash=hash%4294967296,
@@ -161,7 +173,7 @@ function M.install(define,state,options,screen)
     local done={kind='host',name='input_return',
       reading=reading_before,done={kind='push',wants=wants}}
     if chapter_menu then
-      local fn=assert(vm:resolve(3638675204),'chapter pause-menu function missing')
+      local fn=chapter_menu
       done={kind='host',name='chapter_menu_return',thread=vm.thread_id,
         areas=t.areas,defaults=t.area_defaults,focus=t.area_focus,
         save=state.settings.save,save_menu=state.settings.save_menu,

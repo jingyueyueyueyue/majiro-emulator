@@ -108,6 +108,69 @@ CASES = {
         assert(#calls[2].args==2 and calls[2].args[1]==12 and calls[2].args[2]==13)
         assert(state.input.buttons==0)
     """,
+    "cold_chapter_loads_its_pause_library": """
+        chapter();options.resource_names={['pausemenu.mjo']=true}
+        local loads=0
+        MENU_LOADER=function(name)
+          assert(name=='pausemenu.mjo');loads=loads+1
+          return {name=name,functions={{3638675204,748}},code={}}
+        end
+        poll({buttons=2});check()
+        assert(loads==1 and #calls==1 and calls[1].script=='pausemenu.mjo')
+        assert(calls[1].offset==748 and #calls[1].args==0)
+        assert(last_action.done.name=='chapter_menu_return')
+        assert(last_action.done.defaults[2]==500 and last_action.done.save==true)
+        assert(state.chapter_menu_active and not state.settings.save)
+        assert(state.input.buttons==0 and #thread.areas==0)
+    """,
+    "warm_chapter_reuses_loaded_pause_library": """
+        chapter()
+        vm.scripts['pausemenu.mjo']={
+          name='pausemenu.mjo',functions={{3638675204,748}},code={}}
+        poll({buttons=2});check()
+        assert(#calls==1 and calls[1].script=='pausemenu.mjo' and calls[1].offset==748)
+        assert(last_action.done.name=='chapter_menu_return')
+    """,
+    "chapter_without_pause_library_uses_source_default": """
+        chapter();options.resource_names={}
+        poll({x=12.75,y=13.5,buttons=2});check()
+        assert(#calls==1 and calls[1].script=='buttonmenu.mjo' and calls[1].offset==50)
+        assert(calls[1].args[1]==12 and calls[1].args[2]==13)
+        assert(not state.chapter_menu_active and state.settings.save==true)
+        assert(last_action.done.name=='input_return' and thread.area_defaults[2]==500)
+    """,
+    "different_pause_library_keeps_source_callback": """
+        chapter();options.resource_names={['pausemenu.mjo']=true}
+        MENU_LOADER=function(name)return {name=name,functions={{123,90}},code={}}end
+        vm.functions[3638675204]={script={name='unrelated.mjo'},offset=999}
+        poll({buttons=2});check()
+        assert(#calls==1 and calls[1].script=='buttonmenu.mjo' and calls[1].offset==50)
+        assert(not state.chapter_menu_active and state.settings.save==true)
+    """,
+    "nested_chapter_menu_keeps_source_callback": """
+        chapter();options.resource_names={['pausemenu.mjo']=true}
+        state.chapter_menu_active=true
+        poll({buttons=2});check()
+        assert(#calls==1 and calls[1].offset==50 and last_action.done.name=='input_return')
+    """,
+    "ordinary_menu_does_not_load_chapter_library": """
+        defaults();options.resource_names={['pausemenu.mjo']=true}
+        poll({buttons=2});check()
+        assert(#calls==1 and calls[1].offset==50 and not state.chapter_menu_active)
+    """,
+    "chapter_left_click_keeps_source_callback": """
+        chapter();options.resource_names={['pausemenu.mjo']=true}
+        poll({buttons=1});check()
+        assert(#calls==1 and calls[1].offset==40 and not state.chapter_menu_active)
+    """,
+    "declared_broken_pause_library_remains_an_error": """
+        chapter();options.resource_names={['pausemenu.mjo']=true}
+        MENU_LOADER=function()error('invalid pause library fixture')end
+        poll({buttons=2})
+        local ok,err=pcall(check)
+        assert(not ok and tostring(err):find('invalid pause library fixture',1,true))
+        assert(not state.chapter_menu_active and state.settings.save==true)
+    """,
     "mouse_disabled_cannot_inject_callback": """
         setarea(1);defaults();state.settings.mouse=false
         poll({buttons=2,pressed={[13]=true}});check()
@@ -138,9 +201,14 @@ HARNESS = r"""
 local define_map={}
 local state={settings={mouse=true},reading_wait=false}
 local calls={}
+local last_action
+local options={now=function()return 1000 end}
 local vm_module=assert(loadstring(VM_SOURCE))()
 local vm=vm_module.new{
-  loader=function()error('unexpected loader')end,
+  loader=function(name)
+    if MENU_LOADER then return MENU_LOADER(name)end
+    error('unexpected loader')
+  end,
   opcodes={},syscall=function()error('unexpected syscall')end,
 }
 local script={name='recall_menu_fixture.mjo',functions={}}
@@ -158,15 +226,22 @@ local thread=vm.threads[1]
 -- are the installed VM implementations, including their type metadata.
 vm.resume=function(self,action)
   assert(action.kind=='sequence')
+  last_action=action
   for _,call in ipairs(action.calls)do calls[#calls+1]=call end
 end
 local module=assert(loadstring(INPUT_SOURCE))()
-local input=module.install(function(name,fn)define_map[name]=fn end,state,
-    {now=function()return 1000 end})
+local input=module.install(function(name,fn)define_map[name]=fn end,state,options)
 local function call(name,args)return assert(define_map[name])(vm,args,false)end
 local function poll(event)input.sample(event)end
 local function check()call('$areaevent_check',{})end
 local function defaults()call('$areaevent_setdefault',{400,500})end
+local function chapter()
+  script.name='buttonmenu.mjo';vm.scripts[script.name]=script
+  vm.frames[2]=vm.frames[1]
+  vm.frames[1]={script={name='sub_title_yura.mjo'}}
+  state.settings.save=true;state.settings.save_menu=true;state.next_sprite=100
+  defaults()
+end
 local function setarea(index)
   local args={index,10+(index-1)*30,10,25,30,100+index-1,300+index-1,200+index-1}
   args._types={0,0,0,0,0,0,0,0}

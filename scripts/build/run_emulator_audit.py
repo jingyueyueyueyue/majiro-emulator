@@ -22,6 +22,7 @@ EXTRA_SUITES = (
     "test_player_snapshot_numbers", "test_player_file_numbers", "test_player_readmark_owners",
     "test_player_graphics_edges", "test_player_graphics_contract", "test_player_sprite_interpolation",
     "test_player_tile_code_integrity", "test_sprite_argument_forms", "test_tile_actions",
+    "test_chapter_menu_dispatch",
 )
 TEXT_RESOURCE_SUITES = {
     "test_text_mode", "test_patch_manifest", "test_raw_player_patch",
