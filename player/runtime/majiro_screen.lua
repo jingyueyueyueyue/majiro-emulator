@@ -3,7 +3,13 @@
 local M={}
 local function signed(value)return(value+2147483648)%4294967296-2147483648 end
 local function trunc(value)return value<0 and math.ceil(value)or math.floor(value)end
-local function converted(value)
+local function converted(value,x87)
+  if x87 then
+    -- MSVC's x87 conversion returns the low dword of a signed 64-bit
+    -- result; SSE cvttsd2si instead returns INT_MIN on 32-bit overflow.
+    if value~=value or value>=9223372036854775808 or value< -9223372036854775808 then return 0 end
+    return signed(trunc(value))
+  end
   if value~=value or value>=2147483648 or value< -2147483648 then return -2147483648 end
   return trunc(value)
 end
@@ -37,7 +43,7 @@ function M.install(define,state,options)
     if profile.coordinate_mode=='fixed1000'then
       return converted(signed(n*1000)/trunc(scale*1000))
     end
-    return converted(n/scale)
+    return converted(n/scale,profile.integer_conversion=='x87')
   end
   function context.point(x,y)
     local c=screen()
@@ -50,7 +56,7 @@ function M.install(define,state,options)
     if profile.coordinate_mode=='fixed1000'then
       return signed(trunc(multiply(value,trunc(scale*1000))/1000)+base)
     end
-    return converted(value*scale+base)
+    return converted(value*scale+base,profile.integer_conversion=='x87')
   end
   function context.client(x,y)
     local c=screen()

@@ -98,7 +98,7 @@ function M.install(define,state,options,emit)
   define('$histbuff_enable',function(vm,args)return history_depth(args,-1)end)
   define('$histbuff_disable',function(vm,args)return history_depth(args,1)end)
   define('$histbuff_clear',function(vm,args)
-    assert(#args==0);c.history={};return 0
+    assert(#args==0);c.history={};c.history_bytes=0;return 0
   end)
   local function position(value)
     if value==-1 or value==-2 then return #c.history+1 end

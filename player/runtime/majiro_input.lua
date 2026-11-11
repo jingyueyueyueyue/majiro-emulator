@@ -203,7 +203,7 @@ function M.install(define,state,options,screen)
     -- Original inline dispatcher -> 0x44CBA0 sets the sampled logical
     -- pointer, without moving the OS pointer. Used to leave menu hover.
     assert(#args==2)
-    if args[1]==-10000 then
+    if args[1]==-10000 and(options.screen_controls or{}).cursor_reset_sentinel~=false then
       input.cursor_override=nil
       project()
     else

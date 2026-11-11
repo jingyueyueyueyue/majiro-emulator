@@ -17,6 +17,12 @@ from original_opcode import native_number
 
 
 class NumberedAudioOracle(ExtSoundOracle):
+    def stream_field(self,modern):
+        # The pre-replacement stream has the same recovered tail relative to
+        # pause, but lacks three words between active and gain.
+        if modern>=0x65c:return self.stream+self.pause_offset+(modern-0x680)
+        return self.stream+self.handle_offset+(modern-0x620)
+
     def __init__(self, sample, entries):
         super().__init__(sample, entries)
         f = self.functions
@@ -184,14 +190,14 @@ class NumberedAudioOracle(ExtSoundOracle):
         self.write_u32(self.master_slot, master)
         self.write_u32(self.control_master_slot, control_master)
         self.write_u32(self.enabled_slot, 1)
-        self.write_u32(self.ultra_slot, int(ultra))
-        self.write_u32(self.stream+0x650, int(active))
-        self.write_u32(self.stream+0x648, int(completed))
-        self.write_u32(self.stream+0x65c, 777)
-        self.write_u32(self.stream+0x670, 0)
-        self.write_u32(self.stream+0x674, 0)
-        self.write_u32(self.stream+0x688, 0)
-        self.write_u32(self.stream+0x624, 1)
+        if self.ultra_slot is not None:self.write_u32(self.ultra_slot, int(ultra))
+        self.write_u32(self.stream_field(0x650), int(active))
+        self.write_u32(self.stream_field(0x648), int(completed))
+        self.write_u32(self.stream_field(0x65c), 777)
+        self.write_u32(self.stream_field(0x670), 0)
+        self.write_u32(self.stream_field(0x674), 0)
+        self.write_u32(self.stream_field(0x688), 0)
+        self.write_u32(self.stream_field(0x624), 1)
         for address in self.vfs_ready:
             self.write_u32(address, 1)
 
@@ -210,13 +216,13 @@ class NumberedAudioOracle(ExtSoundOracle):
         return {"result": result, "handle": self.read_u32(self.sound_handles+channel*4),
                 "gain": native_number(0, self.read_u32(self.sound_gain)),
                 "pan": native_number(0, self.read_u32(self.sound_pan)) if self.sound_pan else None,
-                "active": bool(self.read_u32(self.stream+0x650)),
-                "stream_gain": native_number(0, self.read_u32(self.stream+0x65c)),
-                "pan_requested": bool(self.read_u32(self.stream+0x688)),
-                "stream_pan": native_number(0, self.read_u32(self.stream+0x68c)),
-                "fade_requested": bool(self.read_u32(self.stream+0x674)),
-                "fade_duration": native_number(0, self.read_u32(self.stream+0x664)),
-                "fade_gain": native_number(0, self.read_u32(self.stream+0x668))
-                             + native_number(0, self.read_u32(self.stream+0x66c)),
+                "active": bool(self.read_u32(self.stream_field(0x650))),
+                "stream_gain": native_number(0, self.read_u32(self.stream_field(0x65c))),
+                "pan_requested": bool(self.read_u32(self.stream_field(0x688))),
+                "stream_pan": native_number(0, self.read_u32(self.stream_field(0x68c))),
+                "fade_requested": bool(self.read_u32(self.stream_field(0x674))),
+                "fade_duration": native_number(0, self.read_u32(self.stream_field(0x664))),
+                "fade_gain": native_number(0, self.read_u32(self.stream_field(0x668)))
+                             + native_number(0, self.read_u32(self.stream_field(0x66c))),
                 "plays": list(self.numbered_plays), "lookups": list(self.lookups),
                 "request": self._input(self.sound_names+channel*0x104, -1).value.decode("cp932")}

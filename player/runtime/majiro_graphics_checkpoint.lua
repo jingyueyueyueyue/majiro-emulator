@@ -48,7 +48,7 @@ function M.compact(commands,live)
       elseif op=='fuchidori'then dest,source=n[2],n[1]
       elseif op=='smoothframe'then dest,source=n[8],n[1]
       elseif op=='paste'then dest,source=n[1],n[2]
-      elseif op=='thumbnail'then dest,source=n[2],n[1]end
+      elseif op=='thumbnail'or op=='alphatable'then dest,source=n[2],n[1]end
       if pixels[dest]or(op=='drawmode'and allocate[id])then
         keep[i]=true;allocate[dest]=true;used[dest]=true
         local size=sizes[dest]
@@ -57,7 +57,9 @@ function M.compact(commands,live)
            n[2]+n[4]<=source_size[1]and n[3]+n[5]<=source_size[2]and
            n[7]==0 and n[8]==0 and n[4]>=size[1]and n[5]>=size[2]then
           pixels[dest]=nil
-          for mask in pairs(masks[dest]or{})do pixels[mask]=nil end
+          -- A color copy does not necessarily overwrite destination masks:
+          -- the original leaves them unchanged when the source has none.
+          -- Keep mask dependencies conservatively across attachment changes.
         elseif op=='fill'and size and n[2]==0 and n[3]==0 and n[4]>=size[1]and n[5]>=size[2]then
           pixels[dest]=nil
         elseif op=='thumbnail'then pixels[dest]=nil end

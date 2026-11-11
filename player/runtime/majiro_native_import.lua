@@ -117,6 +117,7 @@ function M.new(options)
     local isolated=options.modules('runtime/majiro_vm.lua').new{
       loader=live_vm.loader,opcodes=live_vm.opcodes,syscall=live_vm.syscall,
       numeric_profile=live_vm.numeric_profile,string_ops=live_vm.string_ops,text_ops=live_vm.text_ops,
+      array_3d_legacy_stride=live_vm.array_3d_legacy_stride,
       case_string_relations=live_vm.case_string_relations}
     local script=isolated:load(name);identity(manifest,script)
     local pc=integer(fields[1],'native PC missing')
@@ -177,7 +178,8 @@ function M.new(options)
         system={[2802105789]=0},stack_base=0,wants_result=false,line=signed(fields[5])}},
         stack={},stack_types={},globals=globals[2]}},
       thread_id=1,thread_order={1},next_thread=2,schedule_cursor=0,globals=globals,libraries={},
-      status='running',steps=0,entry_script=script.name,numeric_profile=live_vm.numeric_profile}
+      status='running',steps=0,entry_script=script.name,numeric_profile=live_vm.numeric_profile,
+      array_3d_legacy_stride=live_vm.array_3d_legacy_stride}
     packet.state.savepoint={label=decode(unhex(native.label_bytes_hex)),script=script.name,
       offset=pc,thread=1,source_sha256=script.source_sha256}
     packet.state.native_import={schema=1,save_sha256=manifest.save_sha256,
@@ -186,6 +188,7 @@ function M.new(options)
     local check=options.modules('runtime/majiro_vm.lua').new{
       loader=live_vm.loader,opcodes=live_vm.opcodes,syscall=live_vm.syscall,
       numeric_profile=live_vm.numeric_profile,string_ops=live_vm.string_ops,text_ops=live_vm.text_ops,
+      array_3d_legacy_stride=live_vm.array_3d_legacy_stride,
       case_string_relations=live_vm.case_string_relations}
     check:import_state(codec.clone(packet.vm))
     return{schema=1,packet=packet,commands={},identity_verified=true,

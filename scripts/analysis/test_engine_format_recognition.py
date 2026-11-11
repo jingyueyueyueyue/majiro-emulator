@@ -3,7 +3,8 @@ from pathlib import Path
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"convert"))
 from lua_bridge import create_lua
-from port_common import ROOT,archive_dir,sha256,timestamp,write_json
+from port_common import ROOT,sha256,timestamp,write_json
+from inspect_engine_feature_paths import EVIDENCE
 
 
 def main():
@@ -39,13 +40,42 @@ def main():
     configuration=lua.execute((ROOT/"player/runtime/player_configuration.lua").read_text(encoding="utf8"))["make"]()
     assert configuration["numeric_profile"]=="x87"and configuration["engine_generation"]==104
     assert configuration["width"]==800 and configuration["height"]==600
+    # Explicit original-code evidence must override generic generation hints
+    # and survive the real configuration builder, including false booleans.
+    host["engine_requirements"]=lambda:lua.table_from({"family":"Majiro","archive_version":3,
+        "script_signature":"MajiroObjX1.000","features":[
+            "save:105","array:3d_legacy_stride","audio:extensions:ogg-wav",
+            "screen:integer_conversion:x87","screen:cursor_literal_coordinates",
+            "event:release_registers_hook","string:search_case_sensitive",
+            "string:cp932","text:x_no_event","text:history_retains_message",
+            "dialog:warning_retrycancel:53"]},recursive=True)
+    configuration=lua.execute((ROOT/"player/runtime/player_configuration.lua").read_text(encoding="utf8"))["make"]()
+    assert configuration["numeric_profile"]=="sse32"
+    assert configuration["array_3d_legacy_stride"]is True
+    assert configuration["audio_controls"]["extensions"][1]==".ogg"
+    assert configuration["audio_controls"]["extensions"][2]==".wav"
+    assert configuration["screen_controls"]["integer_conversion"]=="x87"
+    assert configuration["screen_controls"]["cursor_reset_sentinel"]is False
+    assert configuration["event_controls"]["release_registers_hook"]is True
+    assert configuration["string_search_case_sensitive"]is True
+    assert configuration["string_case"]=="cp932"
+    assert configuration["text_controls"]["x_control_event"]is False
+    assert configuration["text_controls"]["history_suppresses_message"]is False
+    assert configuration["dialog_controls"]["warning_retrycancel_flags"]==53
+    cases.append({"explicit_code_features_override_generation":True,"status":"passed"})
+    profile=engine["detect"](lua.table_from({"family":"Majiro","archive_version":3,
+        "script_signature":"MajiroObjX1.000",
+        "features":["save:104","external:license:constant_zero"]},recursive=True))
+    assert profile["external_controls"]["license"]=="native_constant_zero"
+    cases.append({"constant_license_code_overrides_generation":True,"status":"passed"})
     for bad in({"family":"other","archive_version":3,"script_signature":"MajiroObjX1.000"},
                 {"family":"Majiro","archive_version":4,"script_signature":"MajiroObjX1.000"},
                 {"family":"Majiro","archive_version":3,"script_signature":"not-a-script"}):
         try:engine["detect"](lua.table_from(bad,recursive=True))
         except Exception:pass
         else:raise AssertionError("unsupported engine format accepted")
-    folder=archive_dir("engine_format_recognition")
+    folder=EVIDENCE/(timestamp().replace(":", "").replace("+", "_")+"_formats")
+    folder.mkdir(parents=True,exist_ok=False)
     report={"schema":1,"status":"passed","timestamp":timestamp(),"cases":cases,
         "exe_fingerprint_validation":False,"exe_required":False,"format_rejection_cases":3,
         "production_configuration_without_hash_registry":True,"device_accessed":False,

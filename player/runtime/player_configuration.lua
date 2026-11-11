@@ -49,10 +49,12 @@ function M.make()
   local requirements=assert(HOST.engine_requirements(),'engine format requirements unavailable')
   local profile=engine.detect(requirements)
   data.numeric_profile=profile.numeric
-  for _,key in ipairs{'minmax_arguments','string_case','integer_parse','empty_search_absent',
-    'case_string_relations','ultra_disable_returns_previous','ultra_fast_mode_available','text_controls',
+  for _,key in ipairs{'minmax_arguments','string_case','string_search_case_sensitive','integer_parse','empty_search_absent',
+    'case_string_relations','array_3d_legacy_stride','ultra_disable_returns_previous','ultra_fast_mode_available','text_controls',
     'voice_controls','screen_controls','graphics_controls','dialog_controls'}do data[key]=profile[key]end
   data.platform_controls=profile.platform_controls;data.external_controls=profile.external_controls
+  data.event_controls=profile.event_controls
+  data.audio_controls=profile.audio_controls
   data.engine_requirements=requirements;data.engine_generation=profile.generation
   local names=HOST.member_names()
   for _,name in ipairs(names)do

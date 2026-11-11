@@ -33,7 +33,7 @@ public final class ModalDialogState {
     public synchronized void foreground(boolean value) { foreground = value; }
     public synchronized boolean owns(Request request) { return current == request; }
     public synchronized void complete(Request request, int answer) {
-        if (current != request || request.answer != null || request.error != null) return;
+        if (current != request || request.answer != null || request.data != null || request.error != null) return;
         int buttons = request.flags & 15;
         if ((buttons == 0 && answer != 1) || (buttons == 1 && answer != 1 && answer != 2)
             || (buttons == 4 && answer != 6 && answer != 7) || (buttons == 5 && answer != 4 && answer != 2))

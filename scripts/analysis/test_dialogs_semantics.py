@@ -42,6 +42,8 @@ def run():
         error_values={oracle.read_u32(address)for address in mode_reference.mode_slots.values()}
         assert error_values in({0},{1}),"unclassified error-dialog playback-mode behavior"
         controls["reset_error_playback_modes"]=error_values=={0}
+        controls["warning_retrycancel_flags"]=oracle.call_dialog(
+            "$dialog_warning_retrycancel",["calibrate"])["dialogs"][0]["flags"]
         for mode in(-1,0,1,2):
             host_state={"request":None,"answer":None,"polls":0}
             def host(action,token,flags,message,caption):
@@ -102,7 +104,8 @@ def run():
                                                    else"reset_playback_modes"]
                                     for flag in("auto_mode","fast_mode","fast_read_mode","ultra_fast_mode"):
                                         assert system["state"]["settings"][flag]==(not reset)
-                                        assert oracle.read_u32(mode_reference.mode_slots[flag])==int(not reset)
+                                        if flag in mode_reference.mode_slots:
+                                            assert oracle.read_u32(mode_reference.mode_slots[flag])==int(not reset)
                                     steps=vm["steps"]
                                     assert vm["run"](vm,100)=="waiting"and vm["steps"]==steps
                                     system["poll"](vm,lua.table())
@@ -116,7 +119,8 @@ def run():
                                     actual=[]if discard else[(0,result)]
                                     for flag in("auto_mode","fast_mode","fast_read_mode","ultra_fast_mode"):
                                         assert system["state"]["settings"][flag]is True
-                                        assert oracle.read_u32(mode_reference.mode_slots[flag])==1
+                                        if flag in mode_reference.mode_slots:
+                                            assert oracle.read_u32(mode_reference.mode_slots[flag])==1
                                 assert actual==reference["stack"],(actual,reference)
                                 assert len(vm["stack"])==initial and host_state["request"]is None
                             except Exception as error:

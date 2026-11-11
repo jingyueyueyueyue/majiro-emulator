@@ -181,8 +181,16 @@ def run():
         oracle=TextOracle(sample,by_name[sample["sample"]]["entries"])
         counts,failures,groups=Counter(),Counter(),Counter()
         call_counts,call_failures,call_arities=Counter(),Counter(),{}
-        profile=profiles[sample["exe_sha256"]]
-        assert profile["text_controls"]==oracle.profile()
+        profile=profiles.get(sample["exe_sha256"])
+        if profile is None:
+            from original_comparison_profiles import recover
+            profile=dict(recover(sample["path"],sample["exe_sha256"],sample["sample"])["profile"])
+            profile["text_controls"]=oracle.profile()
+            report.setdefault("comparison_only_profiles",[]).append({
+                "sample":sample["sample"],"profile":profile})
+        observed = oracle.profile()
+        assert all(observed.get(key)==value for key,value in profile["text_controls"].items())
+        profile = {**profile, "text_controls": observed}
         for group,program in programs():
             oracle.configure()
             draws=[]

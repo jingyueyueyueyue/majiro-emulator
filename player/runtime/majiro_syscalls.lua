@@ -72,13 +72,23 @@ function M.new(options)
     until value~=32767
     return vm:float(value==0 and math.huge or 32767/value)
   end)
+  local function event_key(name)
+    name=name:match('^[^%z]*')
+    if state.events[name]then return name end
+    local hash=strings.hash(name)
+    for key in pairs(state.events)do
+      if strings.hash(key)==hash then return key end
+    end
+    return name
+  end
   local function register_hook(vm,args,after)
     assert(#args==2 and type(args[1])=='string' and type(args[2])=='number','event hook signature')
     local hash=args[2]%4294967296
     local fn=vm:resolve(hash)
     if not fn then vm:fail('event function missing')end
     local hook={hash=hash,after=after,script=fn.script.name,offset=fn.offset,owner=vm.thread_id}
-    local list=state.events[args[1]] or {};state.events[args[1]]=list
+    local key=event_key(args[1])
+    local list=state.events[key] or {};state.events[key]=list
     if after then list[#list+1]=hook else table.insert(list,1,hook) end
     return 0
   end
@@ -89,7 +99,7 @@ function M.new(options)
       for key,hooks in pairs(state.events)do
         if strings.hash(key)==name then groups[#groups+1]=hooks end
       end
-    else groups[1]=state.events[name]or{}end
+    else groups[1]=state.events[event_key(name)]or{}end
     for _,hooks in ipairs(groups)do
       for _,hook in ipairs(hooks)do
         calls[#calls+1]={script=hook.script,offset=hook.offset,args=args}
@@ -102,7 +112,7 @@ function M.new(options)
     -- frames. Ordinary events push head-to-tail on their registered owners;
     -- explicit-target events push tail-to-head on the requested context.
     if wants then vm:push(0)end
-    local hooks=state.events[name]or{}
+    local hooks=state.events[event_key(name)]or{}
     local function inject(hook,owner)
       vm:inject_event(owner,{{script=hook.script,offset=hook.offset,args=args}})
     end
@@ -164,16 +174,20 @@ function M.new(options)
   end)
   define('$event_release',function(vm,args)
     assert(#args==2 and type(args[1])=='string'and type(args[2])=='number','event release signature')
+    if options.event_controls and options.event_controls.release_registers_hook then
+      return register_hook(vm,args,false)
+    end
     local fn=vm:resolve(args[2]%4294967296)
     if not fn then vm:fail('event function missing')end
-    local hooks=state.events[args[1]]
+    local key=event_key(args[1])
+    local hooks=state.events[key]
     if hooks and not state.event_release_locked then
       for index=#hooks,1,-1 do
         local hook=hooks[index]
         if(hook.owner or 1)==vm.thread_id and not hook.protected and
           hook.script==fn.script.name and hook.offset==fn.offset then table.remove(hooks,index)end
       end
-      if #hooks==0 then state.events[args[1]]=nil end
+      if #hooks==0 then state.events[key]=nil end
     end
     return 0
   end)
@@ -225,6 +239,12 @@ function M.new(options)
     if not file then vm:fail('invalid file handle') end
     local at=file.cursor
     local value=file.tokens[at]
+    if numeric and value~=nil then
+      -- String reads remove paired quotes, but native numeric reads call
+      -- atoi on the original comma field (so "73" converts to zero).
+      local remainder=(file.lines or options.config_lines[file.name]or{})[at]
+      if remainder then value=remainder.text:match('^[^,]*')end
+    end
     if file.preferences and value=='check'then
       file.preference_checks=(file.preference_checks or 0)+1
     end
@@ -249,9 +269,7 @@ function M.new(options)
     if numeric then
       -- Original $file_read passes the token to decimal atoi. Markers and
       -- actual EOF therefore convert to zero, rather than raising an error.
-      local prefix=value:match('^%s*([%+%-]?%d+)')
-      local number=prefix and tonumber(prefix) or 0
-      return ((number+2147483648)%4294967296)-2147483648
+      return providers['$atoi'](vm,{value})
     end
     return value
   end
@@ -476,6 +494,11 @@ function M.new(options)
       if type(value)~='number' or value%1~=0 then vm:fail('nonintegral grp_copy argument') end
       request[#request+1]=string.format('%.0f',value)
     end
+    if extended then
+      local controls=options.graphics_controls or{}
+      request[#request+1]=tostring(controls.color_bytes or 4)
+      request[#request+1]=controls.indexed_extcopy==false and'0'or'1'
+    end
     graphics(vm,table.concat(request,' '))
     if snapshot and snapshot~=state.screen_snapshot then
       graphics(vm,'release '..snapshot);state.pages[snapshot]=nil
@@ -644,15 +667,22 @@ function M.new(options)
     if not options.wallpaper then vm:fail('wallpaper host provider missing')end
     return options.wallpaper(args[1],args[2])
   end)
+  local function dispose_page(vm,id)
+    if not state.pages[id]then return 0 end
+    local page=state.pages[id]
+    graphics(vm,string.format('release %d',id))
+    if page.owns_alpha then state.pages[page.antidata]=nil end
+    state.pages[id]=nil;return 0
+  end
   define('$page_release',function(vm,args)
     assert(#args==1,'page_release signature')
-    -- Original 0x44B510 diagnoses an invalid page and returns zero.
-    -- Shipped menu cleanup may release its unused (zero) capture page.
-    if not state.pages[args[1]] then return 0 end
-    local page=state.pages[args[1]]
-    graphics(vm,string.format('release %d',args[1]))
-    if page.owns_alpha then state.pages[page.antidata]=nil end
-    state.pages[args[1]]=nil;return 0
+    -- Original 0x44B510 -> 0x46F260 refuses deletion while a sprite
+    -- references the source. Internal sprite auto-release bypasses this
+    -- script-level guard and calls the page destructor directly.
+    for _,sprite in pairs(state.sprites or{})do
+      if sprite.page==args[1]or sprite.animation_source==args[1]then return 0 end
+    end
+    return dispose_page(vm,args[1])
   end)
   define('$page_set_antidata',function(vm,args)
     assert(#args==2,'page_set_antidata signature')
@@ -727,7 +757,7 @@ function M.new(options)
     for i,n in ipairs(args)do result=result+math.max(0,math.min(255,math.floor(n)))*256^(i-1)end
     return result>=2147483648 and result-4294967296 or result
   end)
-  sprites=options.modules('runtime/majiro_sprites.lua').install(define,state,options,graphics,providers)
+  sprites=options.modules('runtime/majiro_sprites.lua').install(define,state,options,graphics,providers,dispose_page)
   state.before_hide=function(vm)
     if not state.frontbuffer then return end
     release_screen_snapshot(vm)
@@ -952,8 +982,10 @@ function M.new(options)
   state.progress=options.progress or{pictures={},read={}}
   state.progress.lines=state.progress.lines or{}
   local function line_changed(vm,frame)
-    local t=vm.threads[vm.thread_id]
-    if t and t.parent then return end
+    -- Original line handlers update read marks only for context ID zero.
+    -- Portable context IDs start at one; independent and child threads alike
+    -- must not overwrite the main story's current-read state.
+    if vm.thread_id~=1 then return end
     local script=frame.script
     local count=script.line_count or 0
     if count==0 then
@@ -1064,7 +1096,12 @@ function M.new(options)
     return vm:spawn(args[1],parameters,true)
   end)
   define('$thread_end',function(vm,args)
-    assert(#args<=1);vm:terminate(args[1] or vm.thread_id);return 0
+    assert(#args<=1)
+    local target=args[1]or vm.thread_id
+    -- The original refuses to end its primary context (native ID zero).
+    -- Internal VM IDs start at one; exit/reset use terminate directly.
+    if target==0 or target==1 then return 0 end
+    vm:terminate(target);return 0
   end)
   define('$thread_is_exist',function(vm,args)
     assert(#args==1);local t=vm.threads[args[1]]

@@ -11,6 +11,8 @@ import sys
 
 from lua_bridge import create_lua
 from original_opcode import OpcodeOracle, f32_bits, native_number
+from original_fixture_scope import profile_for, finish_scope
+from original_array_layout import legacy_3d_stride
 from test_storage_semantics import equal
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "convert"))
@@ -24,11 +26,12 @@ def run():
     module = lua.execute((ROOT / "player/runtime/majiro_vm.lua").read_text(encoding="utf-8"))
     opcodes = lua.execute((ROOT / "player/tables/opcodes.lua").read_text(encoding="utf-8"))
     execute = lua.eval("""
-    function(mod,ops,opcode,flags,left,indices,dims,flat,profile)
+    function(mod,ops,opcode,flags,left,indices,dims,flat,profile,legacy_stride)
       local script={name='load-fixture',main=0,functions={},
         code={{0,opcode,flags,123,0},{10,0x800,0},{16,0x82b}}}
       local vm=mod.new{opcodes=ops,loader=function()return script end,
-        syscall=function()error('load fixture invoked syscall')end,numeric_profile=profile}
+        syscall=function()error('load fixture invoked syscall')end,numeric_profile=profile,
+        array_3d_legacy_stride=legacy_stride}
       vm:begin(script.name)
       local target=left
       if #dims>0 then
@@ -55,7 +58,11 @@ def run():
     values += [(1, f32_bits(v)) for v in (-1.25, -0.0, 0.0, 1.25, 16777216.0)]
     for sample in dispatch["samples"]:
         oracle = OpcodeOracle(sample)
-        profile = profiles["executables"][sample["exe_sha256"]]["numeric"]
+        profile = profile_for(profiles, sample, report)
+        if profile is None:
+            continue
+        profile = profile["numeric"]
+        legacy_stride=legacy_3d_stride(oracle)
         counts, failures = Counter(), Counter()
         for name in ("ld", "ldelem"):
             row = oracle.rows[name]
@@ -70,6 +77,8 @@ def run():
                     for dimension, index in zip(dims, indices):
                         flat = flat * dimension + index % dimension
                         length *= dimension
+                    if legacy_stride and len(dims)==3:
+                        flat=(indices[0]%dims[0])*dims[1]+(indices[1]%dims[1])*dims[2]+indices[2]%dims[2]
                     ptr = oracle.DATA + 0x30000
                     native_values = [initial]
                     if dims:
@@ -84,7 +93,7 @@ def run():
                                                   budget=20000)
                         ok, error, local, stack, sign, signs, types = execute(
                             module, opcodes, int(row["opcode"], 16), flags, native_number(*initial),
-                            lua.table_from(indices), lua.table_from(dims), flat, profile)
+                            lua.table_from(indices), lua.table_from(dims), flat, profile, legacy_stride)
                         if not ok:
                             reason = str(error)
                         else:
@@ -111,6 +120,7 @@ def run():
                                 "indices": indices, "expected": expected, "reason": reason})
         report["samples"].append({
             "sample": sample["sample"], "exe_sha256": sample["exe_sha256"],
+            "array_3d_legacy_stride":legacy_stride,
             "cases": dict(counts), "failures": dict(failures),
             "passed_opcodes": sorted(name for name in counts if not failures[name]),
         })
@@ -120,9 +130,12 @@ def run():
     report["mismatches"] = sum(sum(row["failures"].values()) for row in report["samples"])
     report["test_sources"] = {
         name: hashlib.sha256((ROOT / "scripts/analysis" / name).read_bytes()).hexdigest()
-        for name in ("original_opcode.py", "test_storage_semantics.py", "test_load_semantics.py")
+        for name in ("original_opcode.py", "original_fixture_scope.py",
+                     "original_comparison_profiles.py", "original_array_layout.py",
+                     "test_storage_semantics.py", "test_load_semantics.py")
     }
     report["status"] = "passed" if not report["mismatches"] else "failed"
+    finish_scope(report)
     folder = archive_dir("load_semantics")
     write_json(folder / (folder.name[:8] + "_load_semantics.json"), report)
     write_json(ROOT / "reports/load_semantics_tests.json", report)

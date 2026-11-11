@@ -102,13 +102,18 @@ def main():
     actions = []
     lua, _, _, system = registered_providers(overrides={
         "dialog": lambda action, *args: actions.append(action) or ("pending" if action == "begin" else "data ")})
-    vm = lua.eval("""function()return{thread_id=1,context_generation=0,threads={{finished=false}},
-      select_thread=function(self,id)self.thread_id=id end,save_thread=function()end,
-      push=function(self,value)error('discarded setup result was pushed')end}end""")()
+    vm_module = lua.execute((ROOT / "player/runtime/majiro_vm.lua").read_text("utf8"))
+    opcodes = lua.execute((ROOT / "player/tables/opcodes.lua").read_text("utf8"))
+    vm = lua.eval("""function(mod,ops,invoke)
+      local script={name='setup-fixture.mjo',main=0,functions={},code={{0,0x191}}}
+      local v=mod.new{opcodes=ops,loader=function()return script end,syscall=invoke}
+      v:begin(script.name);return v
+    end""")(vm_module, opcodes, system["invoke"])
     settings = system["state"]["settings"]
     before = {key: settings[key] for key in ("musicvolume", "soundvolume", "voicevolume", "mojispeed", "autospeed", "effectspeed")}
     assert system["providers"]["$all_setup_dialog"](vm, lua.table(), False) == (None, True)
     assert system["dialogs"]["poll"](vm) is True
+    assert len(vm["stack"]) == 0 and vm["waiting"] is None
     assert actions == ["begin", "poll"]
     assert before == {key: settings[key] for key in before}
     rows.append({"sample": "happy_princess", "hash": "4ea2d1fc", "argc": 0, "opcode": "syscallp",

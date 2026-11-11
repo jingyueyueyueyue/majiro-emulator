@@ -12,12 +12,12 @@ from port_common import ROOT,archive_dir,timestamp,write_json
 
 
 def run():
-    folder=archive_dir("capture_cache_batch");pixels=Pixels();written={};host=[]
+    folder=archive_dir("capture_cache_batch");pixels=Pixels();written={};host=[];clock=[1000]
     def write(name,data):written[name]=data;return True
     lua,_,_,system=registered_providers(overrides={"graphics":pixels,"file_write":write,
         "wallpaper":lambda *args:host.append(("wallpaper",args))or 1,
         "change_cursor":lambda *args:host.append(("cursor",args))or True,
-        "environment":{"CACHEFOLDER":"pic_cache"}})
+        "environment":{"CACHEFOLDER":"pic_cache"},"now":lambda:clock[0]})
     vm=lua.eval("""function()
       return{thread_id=1,frame=function()return{script={name='capture'}}end,
         resolve=function(self,hash)return{script={name='capture'},offset=hash}end,
@@ -30,6 +30,10 @@ def run():
     call("$do_mouse_capture")
     calls=list(vm["last"]["calls"].values())
     assert [row["offset"]for row in calls]==[4,2,1]
+    system["input"]["sample"](lua.table_from({"x":12,"y":34,"held_buttons":0}))
+    call("$do_mouse_capture")
+    assert [row["offset"]for row in vm["last"]["calls"].values()]==[1]
+    clock[0]=1251
     system["input"]["sample"](lua.table_from({"x":12,"y":34,"held_buttons":0}))
     call("$do_mouse_capture")
     assert [row["offset"]for row in vm["last"]["calls"].values()]==[5,1]

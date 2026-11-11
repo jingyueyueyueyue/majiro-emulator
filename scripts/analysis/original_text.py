@@ -511,7 +511,22 @@ class TextOracle(CallOracle):
         self.instruction("text","DEF");self.instruction("proc")
         message=self.last_message()
         if message not in("ABC","ABCDEF"):raise ValueError("unclassified message capture behavior")
-        return{"legacy_font_defaults":legacy,"overlay_saves_style":restored,
+        profile={"legacy_font_defaults":legacy,"overlay_saves_style":restored,
                "overlay_suppresses_message":bool(self.overlay_slot),
                "message_first_line_only":message=="ABC",
                "uppercase_pause_event":bool(pause)}
+        self.configure()
+        self.call_api("$histbuff_disable", [])
+        self.instruction("text", "A");self.instruction("proc")
+        disabled_message = self.last_message()
+        if disabled_message not in ("", "A"):
+            raise ValueError("unclassified disabled-history message capture")
+        if disabled_message:
+            profile["history_suppresses_message"] = False
+        self.configure()
+        observed = self.instruction("ctrl", "x", [(2, self.string("X", 0))])
+        if observed["stack"]:
+            if len(observed["stack"]) != 1 or self.string_result(*observed["stack"][0]) != "X" or observed["events"]:
+                raise ValueError("unclassified X_CONTROL argument handling")
+            profile["x_control_event"] = False
+        return profile

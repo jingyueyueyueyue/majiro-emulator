@@ -1,6 +1,6 @@
 -- Majiro sprite identities and geometry. Pages and sprite lifetimes are separate.
 local M={}
-function M.install(define,state,options,graphics,providers)
+function M.install(define,state,options,graphics,providers,dispose_page)
   state.sprites={};state.sprite_order={};state.next_sprite=268435456
   local register=define
   define=function(name,provider)
@@ -33,27 +33,34 @@ function M.install(define,state,options,graphics,providers)
     return value
   end
   local function update(s)
-    for key,sequence in pairs(s.transform_sequences or {})do
-      local elapsed=options.now()-sequence.began;local from=sequence.from
+    local function sequence_value(sequence,integer)
+      local elapsed=math.abs(options.now()-sequence.began)
+      local from=sequence.from
+      local cycle,terminal=0,false
       for _,point in ipairs(sequence.points)do
-        if point.duration<0 then s[key]=from;break end
-        if point.duration>0 and elapsed<point.duration then
-          s[key]=from+(point.value-from)*elapsed/point.duration;break
-        end
-        elapsed=elapsed-point.duration;from=point.value;s[key]=from
+        if point.duration<0 then terminal=true;break end
+        cycle=cycle+point.duration
       end
+      if not terminal and cycle>0 and elapsed>=cycle then
+        elapsed=elapsed%cycle;from=sequence.points[#sequence.points].value
+      end
+      for _,point in ipairs(sequence.points)do
+        if point.duration<0 then return point.value,true end
+        if point.duration>0 and elapsed<point.duration then
+          local value=from+(point.value-from)*elapsed/point.duration
+          if integer then value=math.max(0,math.min(255,value<0 and math.ceil(value)or math.floor(value)))end
+          return value,false
+        end
+        elapsed=elapsed-point.duration;from=point.value
+      end
+      return from,false
+    end
+    for key,sequence in pairs(s.transform_sequences or {})do
+      local complete;s[key],complete=sequence_value(sequence,false)
+      if complete then s.transform_sequences[key]=nil end
     end
     if s.alpha_sequence then
-      local sequence=s.alpha_sequence
-      local elapsed=options.now()-sequence.began
-      local from=sequence.from;local complete=true
-      for _,point in ipairs(sequence.points)do
-        if point.duration<0 then s.anti=point.value;break end
-        if point.duration>0 and elapsed<point.duration then
-          s.anti=math.floor(from+(point.value-from)*elapsed/point.duration);complete=false;break
-        end
-        elapsed=elapsed-point.duration;from=point.value;s.anti=from
-      end
+      local complete;s.anti,complete=sequence_value(s.alpha_sequence,true)
       if complete then s.alpha_sequence=nil end
     end
     for key,tween in pairs(s.tweens or {})do
@@ -240,6 +247,7 @@ function M.install(define,state,options,graphics,providers)
     assert(#args==2 or #args==3 or(key=='rotate'and #args==4))
     local s=sprite(vm,args[1]);update(s)
     s.extended=true
+    if s.transform_sequences then s.transform_sequences[key]=nil end
     s.tweens[key]={from=s[key],to=args[2],duration=args[3] or 0,began=options.now(),
       continuous=key=='rotate'and(args[4]or 0)~=0 and(args[3]or 0)~=0}
     update(s);state.dirty=true;return 0
@@ -267,6 +275,7 @@ function M.install(define,state,options,graphics,providers)
     local points={}
     for i=2,#args,2 do points[#points+1]={value=args[i],duration=args[i+1]or -1}end
     s.transform_sequences=s.transform_sequences or {}
+    s.tweens[key]=nil
     s.transform_sequences[key]={from=s[key],points=points,began=options.now()}
     s.extended=true;update(s);state.dirty=true;return 0
   end
@@ -333,8 +342,20 @@ function M.install(define,state,options,graphics,providers)
   end)
   define('$sprite_release',function(vm,args)
     assert(#args==1);local s=sprite(vm,args[1])
-    if s.smooth_page then providers['$page_release'](vm,{s.smooth_page})end
-    if s.auto_release then providers['$page_release'](vm,{s.animation_source or s.page}) end
+    local function dispose(id)
+      if dispose_page then dispose_page(vm,id)else providers['$page_release'](vm,{id})end
+    end
+    if s.smooth_page then dispose(s.smooth_page)end
+    if s.auto_release then
+      local source=s.animation_source or s.page
+      local page=state.pages[source]
+      -- Original sprite disposal releases any attached alpha page,
+      -- including a separately created mask installed by set_antidata.
+      if page and not page.owns_alpha and page.antidata and page.antidata~=0 then
+        dispose(page.antidata)
+      end
+      dispose(source)
+    end
     state.sprites[args[1]]=nil
     for i,id in ipairs(state.sprite_order) do if id==args[1] then table.remove(state.sprite_order,i);break end end
     state.dirty=true;return 0

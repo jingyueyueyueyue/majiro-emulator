@@ -94,8 +94,8 @@ inline bool png_has_transparency(const std::vector<uint8_t>& bytes) {
         const uint32_t length=uint32_t(bytes[at])<<24|uint32_t(bytes[at+1])<<16|
             uint32_t(bytes[at+2])<<8|uint32_t(bytes[at+3]);
         const std::string kind(reinterpret_cast<const char*>(bytes.data()+at+4),4);
-        if(kind=="IDAT"||kind=="IEND")return false;
         if(length>bytes.size()-at-12)throw std::runtime_error("truncated PNG transparency chunk");
+        if(kind=="IDAT"||kind=="IEND")return false;
         if(kind=="tRNS")return length>0;
         at+=size_t(length)+12;
     }

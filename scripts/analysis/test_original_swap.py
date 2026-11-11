@@ -6,7 +6,7 @@ from original_x86 import Original
 from native_pixels import Pixels
 from test_original_blend import original_page
 from lua_bridge import create_lua
-from port_common import ROOT, write_json, sha256,native_pixels_library
+from port_common import ROOT, write_json, sha256,player_pixels_library as native_pixels_library
 
 
 def run():
@@ -69,7 +69,7 @@ def run():
             cases.append({"same_page": same, "rectangle": rectangle, "mask_pair": masked})
     # A swap writes both pages; replay pruning must retain its other operand.
     lua = create_lua()
-    compact = lua.execute((ROOT / "runtime/majiro_graphics_checkpoint.lua").read_text(encoding="utf-8"))["compact"]
+    compact = lua.execute((ROOT / "player/runtime/majiro_graphics_checkpoint.lua").read_text(encoding="utf-8"))["compact"]
     commands = ["create 1 2 1 0", "fill 1 0 0 2 1 255", "create 2 2 1 0",
                 "fill 2 0 0 2 1 65280", "swap 1 0 0 2 1 2 0 0", "release 1"]
     pruned = list(compact(lua.table_from(commands), lua.table_from(

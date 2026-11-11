@@ -36,15 +36,15 @@ class VoiceSettingsOracle(TextOracle):
             if len(bases)!=1 or sizes!=[length*128]:
                 raise ValueError("original voice label table dimensions changed")
             self.label_tables[name]={"base":bases[0],"capacity":length,"stride":128}
-        setup=f.body(f.syscall_helper(self.entries["$get_voice_setup"]))
+        setup=f.body(f.syscall_helper(self.entries["$get_voice_setup"]))if "$get_voice_setup" in self.entries else []
         arrays={operand.mem.disp for row in setup for operand in row.operands
                 if operand.type==capstone.CS_OP_MEM and operand.mem.index and operand.mem.scale==4
                 and operand.mem.disp>=0x400000}
         flags={operand.mem.disp for row in setup for operand in row.operands
                if operand.type==capstone.CS_OP_MEM and not operand.mem.base and not operand.mem.index
                and operand.mem.disp not in(self.frame_global,self.context_global)}
-        if len(arrays)!=1 or len(flags)!=1:raise ValueError("original voice setup query fields changed")
-        self.levels=arrays.pop();self.female_slot=flags.pop()
+        if setup and(len(arrays)!=1 or len(flags)!=1):raise ValueError("original voice setup query fields changed")
+        self.levels=arrays.pop()if arrays else None;self.female_slot=flags.pop()if flags else None
         self.scalars={}
         for name in("$voice_musicdown_vol","$is_voice_musicdown","$set_voice_male","$set_voice_skip"):
             if name not in self.entries:continue

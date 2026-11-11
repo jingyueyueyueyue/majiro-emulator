@@ -6,7 +6,7 @@ import sys
 
 from native_pixels import Pixels
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "convert"))
-from port_common import ROOT, archive_dir, sha256, write_json,native_pixels_library
+from port_common import ROOT, archive_dir, sha256, write_json,player_pixels_library as native_pixels_library
 
 
 def run():

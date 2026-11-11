@@ -85,7 +85,7 @@ public final class MovieTextures {
         volatile boolean closed, finished, suspended;
         volatile String error;
         long end;
-        boolean seeking;
+        boolean seeking, prepared;
         ByteBuffer rgba;
         final float[] transform = new float[16];
         final FloatBuffer quad = ByteBuffer.allocateDirect(16*4).order(ByteOrder.nativeOrder())
@@ -116,13 +116,14 @@ public final class MovieTextures {
                     player.setSurface(surface);
                     player.setVolume(level(gain),level(gain));
                     player.setOnPreparedListener(new IMediaPlayer.OnPreparedListener() {
-                        @Override public void onPrepared(IMediaPlayer prepared) {
+                        @Override public void onPrepared(IMediaPlayer ready) {
                             if (closed || owner!=player) return;
                             try {
                                 long duration=owner.getDuration();
                                 end=requestedEnd<0?duration:Math.min(requestedEnd,duration);
                                 if(duration<=0 || from>=end)throw new IOException("movie range outside duration");
                                 resize(owner.getVideoWidth(),owner.getVideoHeight());
+                                prepared=true;
                                 if(from>0)seekStart();else if(!suspended)owner.start();
                                 handler.post(rangePoll);
                             } catch(Exception failure) { fail("movie prepare: "+failure); }
@@ -131,14 +132,19 @@ public final class MovieTextures {
                     player.setOnSeekCompleteListener(new IMediaPlayer.OnSeekCompleteListener() {
                         @Override public void onSeekComplete(IMediaPlayer completed) {
                             if(closed || owner!=player)return;
-                            seeking=false;
-                            if(!suspended && !finished)owner.start();
+                            try{
+                                seeking=false;
+                                if(!suspended && !finished && prepared)owner.start();
+                            }catch(RuntimeException failure){fail("movie seek completion: "+failure);}
                         }
                     });
                     player.setOnCompletionListener(new IMediaPlayer.OnCompletionListener() {
                         @Override public void onCompletion(IMediaPlayer completed) {
                             if(closed || owner!=player)return;
-                            if(repeat)seekStart();else finished=true;
+                            try{
+                                if(pixels==null){fail("movie decoder completed without a frame");return;}
+                                if(repeat)seekStart();else finished=true;
+                            }catch(RuntimeException failure){fail("movie completion: "+failure);}
                         }
                     });
                     player.setOnErrorListener(new IMediaPlayer.OnErrorListener() {
@@ -184,9 +190,11 @@ public final class MovieTextures {
         void pause(final boolean value) {
             suspended=value;
             if(handler!=null)handler.post(new Runnable(){@Override public void run(){
-                if(closed || player==null || finished)return;
-                if(value){if(player.isPlaying())player.pause();}
-                else if(!seeking)player.start();
+                if(closed || player==null || finished || !prepared)return;
+                try{
+                    if(suspended){if(player.isPlaying())player.pause();}
+                    else if(!seeking)player.start();
+                }catch(RuntimeException failure){fail("movie lifecycle: "+failure);}
             }});
         }
         int shader(int type,String source) throws IOException {

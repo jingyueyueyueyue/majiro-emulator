@@ -74,8 +74,17 @@ function M.install(define,state,options,providers,graphics)
   end)
   local excluded={names=true,calls=true,graphics_journal=true,save_catalog=true,restoring=true,
     media_providers=true,tiles_actions=true,tiles_analysis=true}
-  local function snapshot(vm)
-    state.graphics_journal=graphics_checkpoint.compact(state.graphics_journal,state.pages)
+  -- Exactly the replayable mutations recorded by the independent syscall
+  -- graphics journal. Transactions and host/platform operations are not data.
+  local replay_operations={create=true,load=true,load8=true,alpha=true,antidata=true,copy=true,
+    extcopy=true,swap=true,fill=true,extfill=true,mulfill=true,set=true,sepia=true,alphatable=true,
+    text=true,glyphs=true,paste=true,modify=true,thumbnail=true,release=true,drawmode=true,
+    reverse=true,revmulcopy=true,mulcopy=true,overlayfill=true,mosaic=true,
+    thumbrect=true,fuchidori=true,tablecopy=true,smoothframe=true}
+  local function snapshot(vm,compacted)
+    if not compacted then
+      state.graphics_journal=graphics_checkpoint.compact(state.graphics_journal,state.pages)
+    end
     local saved={}
     for field,value in pairs(state)do
       if not excluded[field]and type(value)~='function'then saved[field]=value end
@@ -186,8 +195,8 @@ function M.install(define,state,options,providers,graphics)
     end
     return fill(saved),memo,fill
   end
-  local function restore(vm,packet,commands,staged,validated)
-    commands=graphics_checkpoint.compact(commands,packet.state.pages)
+  local function restore(vm,packet,commands,validated,transaction,persistent,compacted)
+    if not compacted then commands=graphics_checkpoint.compact(commands,packet.state.pages)end
     local saved_registry=state.registry;local saved_progress=state.progress
     local saved_persistent=vm.globals[0]
     local saved_preferences={}
@@ -196,16 +205,45 @@ function M.install(define,state,options,providers,graphics)
     end
     local saved_settings={}
     for _,field in ipairs{'musicvolume','soundvolume','voicevolume','mojispeed','autospeed',
-      'effectspeed','font_name','font_proportional','fullscreen'}do saved_settings[field]=state.settings[field]end
+      'effectspeed','font_name','font_proportional','fullscreen','font_quality',
+      'voice_setup_levels','voice_musicdown','voice_musicdown_vol','talk_male','talk_female',
+      'nanido','game_speed'}do saved_settings[field]=codec.clone(state.settings[field])end
     local generation=state.media.generation
-    for _,spec in pairs(state.media.channels)do options.audio('stop',spec)end
+    for _,spec in pairs(state.media.channels)do
+      transaction.stopped[#transaction.stopped+1]=spec
+      assert(options.audio('stop',spec)~=false,'audio cleanup rejected during load')
+    end
     if validated and options.movie then
-      if state.media.movie then options.movie('stop',state.media.movie)end
-      if state.media.movie_texture then options.movie('texture_stop',state.media.movie_texture)end
+      local previous=state.media.movie_texture or state.media.movie
+      if previous then
+        transaction.movie=previous
+        -- Staged pages already own their new IDs. The old transport may
+        -- forget its page, but must never release that ID in the new scene.
+        assert(options.movie('checkpoint_detach',previous)~=false,'movie cleanup rejected during load')
+      end
     end
     local _,memo,fill=install_state(packet.state)
     state.time_control=state.time_control or{scale=1,anchor=0,offset=0}
     local restored_vm=fill(packet.vm)
+    local audio_generations={}
+    state.media.generation=math.max(generation,state.media.generation)
+    for channel,spec in pairs(state.media.channels)do
+      state.media.generation=state.media.generation+1
+      audio_generations[channel]={before=spec.generation,after=state.media.generation}
+      spec.generation=state.media.generation
+    end
+    -- Audio waits also live inside suspended event-return continuations.
+    -- Rebind only waits that owned the saved transport; already-stale waits
+    -- must remain stale instead of acquiring an unrelated restored stream.
+    local visited={}
+    local function rebind_audio(value)
+      if type(value)~='table'or visited[value]then return end
+      visited[value]=true
+      local owner=value.kind=='audio'and audio_generations[value.channel]
+      if owner and value.generation==owner.before then value.generation=owner.after end
+      for _,child in pairs(value)do rebind_audio(child)end
+    end
+    rebind_audio(restored_vm)
     -- Reinstall state entries which are process-wide rather than per-slot.
     state.registry=saved_registry;state.save_catalog=index.slots
     for name,value in pairs(saved_settings)do state.settings[name]=value end
@@ -215,18 +253,7 @@ function M.install(define,state,options,providers,graphics)
     for position,value in pairs(saved_progress.lines or{})do state.progress.lines[position]=value end
     state.progress.scripts=state.progress.scripts or{}
     for name,value in pairs(saved_progress.scripts or{})do state.progress.scripts[name]=value end
-    state.graphics_journal={}
-    state.restoring=true
-    if staged then
-      assert(options.graphics('checkpoint_commit')=='OK','external graphics commit failed')
-    else
-      options.graphics('reset_pages')
-      command_batches(commands,function(batch)
-        local result=options.graphics(batch);assert(result=='OK','graphics checkpoint replay failed')
-      end)
-    end
     state.graphics_journal=commands
-    state.restoring=false
     if validated then
       -- Consume the exact private script copies which passed staging. Do not
       -- reload a resource after the live state/graphics have been committed.
@@ -241,24 +268,147 @@ function M.install(define,state,options,providers,graphics)
       if not ok then error(why,0)end
       vm.hooks={};vm.modal_dialog=nil;vm.external_checker=nil
     else vm:import_state(restored_vm)end
-    vm.globals[0]=saved_persistent
-    for hash,value in pairs(saved_preferences)do vm.globals[0][hash]=value end
+    vm.globals[0]=persistent or saved_persistent
+    if not persistent then
+      for hash,value in pairs(saved_preferences)do vm.globals[0][hash]=value end
+    end
     assert(options.set_clock,'checkpoint clock restore is unavailable')
-    options.set_clock(packet.wall_clock or packet.clock)
+    transaction.clock_changed=true;options.set_clock(packet.wall_clock or packet.clock)
     state.present_completed=state.present_requested
     state.input.buttons=0;state.input.held_buttons=0;state.input.pressed={};state.input.down={}
     state.input.cursor_override=nil
-    state.media.generation=math.max(generation,state.media.generation)
     for _,spec in pairs(state.media.channels)do
-      state.media.generation=state.media.generation+1;spec.generation=state.media.generation
       local at=spec.paused_at or(packet.wall_clock or packet.clock)
       if spec.loop or at-spec.started<spec.duration_ms then
+        transaction.restarted[#transaction.restarted+1]=spec
         if state.media.replay then state.media.replay(vm,spec)else options.audio('play',spec)end
       end
     end
     state.dirty=true;state.load_generation=(state.load_generation or 0)+1
     -- The saved frames replace the caller; a value must not enter their stack.
-    checkpoint=snapshot(vm)
+    checkpoint=snapshot(vm,compacted)
+    return nil,true
+  end
+  local function validate_checkpoint(packet,commands)
+    assert(type(packet)=='table'and packet.schema==1 and type(packet.state)=='table'
+      and type(packet.vm)=='table'and type(commands)=='table','invalid checkpoint structure')
+    local function finite(value)
+      return type(value)=='number'and value==value and math.abs(value)<math.huge
+    end
+    assert(finite(packet.clock)and finite(packet.wall_clock or packet.clock),'invalid checkpoint clock')
+    local saved=packet.state
+    for _,key in ipairs{'console','settings','input','media','pages','progress','registry',
+      'preference_bindings'}do
+      assert(type(saved[key])=='table','checkpoint state missing '..key)
+    end
+    for _,key in ipairs{'pictures','read'}do
+      assert(type(saved.progress[key])=='table','checkpoint progress missing '..key)
+    end
+    for _,key in ipairs{'lines','scripts'}do
+      assert(saved.progress[key]==nil or type(saved.progress[key])=='table','invalid checkpoint progress '..key)
+    end
+    assert(type(saved.media.channels)=='table'and finite(saved.media.generation)
+      and saved.media.generation>=0 and saved.media.generation%1==0,'invalid checkpoint media')
+    for channel,spec in pairs(saved.media.channels)do
+      assert(type(channel)=='string'and type(spec)=='table'and spec.id==channel
+        and type(spec.file)=='string'and finite(spec.started)and finite(spec.duration_ms)
+        and spec.duration_ms>=0 and finite(spec.generation),'invalid checkpoint audio channel')
+    end
+    for _,command in ipairs(commands)do
+      assert(type(command)=='string'and #command<60000 and
+        replay_operations[command:match('^(%S+)')],'invalid checkpoint graphics operation')
+    end
+  end
+  local function undo_tables(...)
+    -- Snapshot entries, retaining every original table identity and function.
+    -- Codec clones would lose provider closures and aliases shared with frames.
+    local tables={}
+    local function remember(value)
+      if type(value)~='table'or tables[value]then return end
+      local entries={};tables[value]=entries
+      for key,child in pairs(value)do
+        entries[key]=child;remember(key);remember(child)
+      end
+    end
+    for i=1,select('#',...)do remember(select(i,...))end
+    return function()
+      for target,entries in pairs(tables)do
+        for key in pairs(target)do target[key]=nil end
+        for key,value in pairs(entries)do target[key]=value end
+      end
+    end
+  end
+  local function staged_restore(vm,packet,commands,persistent)
+    assert(not vm.modal_dialog and not vm.external_checker,'load owner request is pending')
+    assert(options.set_clock,'checkpoint clock restore is unavailable')
+    validate_checkpoint(packet,commands)
+    local compacted=graphics_checkpoint.compact(commands,packet.state.pages)
+    -- Stage private script copies so the live loader cannot change or fail
+    -- between validation and committing the graphics/state transaction.
+    local staging=options.modules('runtime/majiro_vm.lua').new{
+      loader=function(name)return codec.clone(vm.loader(name))end,
+      opcodes=vm.opcodes,syscall=vm.syscall,numeric_profile=vm.numeric_profile,
+      array_3d_legacy_stride=vm.array_3d_legacy_stride,
+      string_ops=vm.string_ops,text_ops=vm.text_ops,case_string_relations=vm.case_string_relations}
+    staging:import_state(codec.clone(packet.vm))
+    local undo=undo_tables(state,vm)
+    local previous_checkpoint=checkpoint
+    local previous_clock=(options.wall_now or options.now)()
+    local transaction={stopped={},restarted={}}
+    local begun=false
+    local ok,problem=pcall(function()
+      assert(options.graphics('checkpoint_begin')=='OK','load requires transactional graphics staging')
+      begun=true;state.restoring=true
+      assert(options.graphics('reset_pages')=='OK','load graphics staging reset failed')
+      command_batches(commands,function(batch)
+        assert(options.graphics(batch)=='OK','load graphics staging failed')
+      end)
+      restore(vm,packet,compacted,staging,transaction,persistent,true)
+      -- Commit only after every fallible state/VM/clock/media operation.
+      assert(options.graphics('checkpoint_commit')=='OK','load graphics commit failed')
+      begun=false;state.restoring=false
+    end)
+    if not ok then
+      local failures={}
+      local function recover(label,action)
+        local success,why=pcall(action)
+        if not success then failures[#failures+1]=label..': '..tostring(why)end
+      end
+      for _,spec in ipairs(transaction.restarted)do
+        recover('new audio cleanup',function()
+          assert(options.audio('stop',spec)~=false,'rejected')
+        end)
+      end
+      undo();checkpoint=previous_checkpoint
+      if transaction.clock_changed then
+        recover('clock rollback',function()options.set_clock(previous_clock)end)
+      end
+      for _,spec in ipairs(transaction.stopped)do
+        recover('audio rollback',function()
+          local copy={};for key,value in pairs(spec)do copy[key]=value end
+          if state.media.replay then state.media.replay(vm,copy)
+          else assert(options.audio('play',copy)~=false,'rejected')end
+        end)
+      end
+      if transaction.movie then
+        recover('movie rollback',function()
+          local spec=transaction.movie;local copy={}
+          for key,value in pairs(spec)do copy[key]=value end
+          if spec.texture then copy.page_hint=spec.page end
+          local action=spec.texture and'texture_play'or spec.range_to and'play_fromto'or
+            spec.repeat_play and'play_repeat'or'play'
+          local value=options.movie(action,copy)
+          assert(value~=false and value~=0,'movie restart rejected')
+        end)
+      end
+      -- Media recovery can write pixels. Restore the old page map last.
+      if begun then recover('graphics rollback',function()
+        assert(options.graphics('checkpoint_rollback')=='OK','rejected')
+      end)end
+      undo();checkpoint=previous_checkpoint
+      if #failures>0 then problem=tostring(problem)..'; rollback failed: '..table.concat(failures,'; ')end
+      error(problem,0)
+    end
     return nil,true
   end
   define('$do_load',function(vm,args)
@@ -281,7 +431,7 @@ function M.install(define,state,options,providers,graphics)
         offset=ending+length+1
       end
     end
-    return restore(vm,packet,commands)
+    return staged_restore(vm,packet,commands)
   end)
   local function external(vm,action,data)
     if not options.external_save then vm:fail('external save document provider unavailable')end
@@ -323,23 +473,7 @@ function M.install(define,state,options,providers,graphics)
       assert(not command:find('save://',1,true)and not command:find('..',1,true),
         'external checkpoint references an unsafe path')
     end
-    -- Validate scripts, identity and instruction positions in an isolated VM.
-    local staging=options.modules('runtime/majiro_vm.lua').new{
-      loader=vm.loader,opcodes=vm.opcodes,syscall=vm.syscall,numeric_profile=vm.numeric_profile,
-      string_ops=vm.string_ops,text_ops=vm.text_ops,case_string_relations=vm.case_string_relations}
-    staging:import_state(codec.clone(packet.vm))
-    local begun=options.graphics('checkpoint_begin')
-    assert(begun=='OK','external load requires transactional graphics staging')
-    local ok,problem=pcall(function()
-      assert(options.graphics('reset_pages')=='OK','external graphics staging reset failed')
-      command_batches(commands,function(batch)
-        assert(options.graphics(batch)=='OK','external graphics staging failed')
-      end)
-    end)
-    if not ok then options.graphics('checkpoint_rollback');error(problem,0)end
-    -- Inputs have passed VM and complete graphics staging; restore cannot
-    -- observe partially decoded script/position or a failed graphics command.
-    return restore(vm,packet,commands,true)
+    return staged_restore(vm,packet,commands)
   end)
   define('$set_save_info',function(vm,args)
     assert(#args==2 and type(args[2])=='string')
@@ -376,26 +510,8 @@ function M.install(define,state,options,providers,graphics)
       assert(codec.encode(plan)==sealed,'native import plan changed after verification')
       plan=codec.decode(sealed)
       assert(plan.packet.identity==options.source_identity,'native import plan source changed')
-      assert(not vm.modal_dialog and not vm.external_checker,'native import owner request is pending')
-      assert(options.set_clock,'native import clock restore is unavailable')
-      local staging=options.modules('runtime/majiro_vm.lua').new{
-        loader=function(name)return codec.clone(vm.loader(name))end,opcodes=vm.opcodes,syscall=vm.syscall,
-        numeric_profile=vm.numeric_profile,string_ops=vm.string_ops,text_ops=vm.text_ops,
-        case_string_relations=vm.case_string_relations}
-      staging:import_state(codec.clone(plan.packet.vm))
       local saved_persistent=codec.clone(plan.persistent_globals)
-      local begun=options.graphics('checkpoint_begin')
-      assert(begun=='OK','native import requires transactional graphics')
-      local ok,why=pcall(function()
-        assert(options.graphics('reset_pages')=='OK','native import graphics reset failed')
-        command_batches(plan.commands,function(batch)
-          assert(options.graphics(batch)=='OK','native import graphics staging failed')
-        end)
-      end)
-      if not ok then options.graphics('checkpoint_rollback');error(why,0)end
-      restore(vm,plan.packet,plan.commands,true,staging)
-      vm.globals[0]=saved_persistent
-      checkpoint=snapshot(vm)
+      staged_restore(vm,plan.packet,plan.commands,saved_persistent)
       return 0
     end,
     flush=function(vm)

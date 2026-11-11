@@ -49,6 +49,20 @@ def main():
         (b"overlay.rct", image(b"TS01", encrypted(overlay + b"TS"), b"base.rct")),
         (b"base.rct", image(b"TS00", encrypted(base + b"TS")))],
         password, bytes([3, 2, 1, 255, 0x33, 0x22, 0x11, 255]), [2, 1])
+    palette = bytes(component for i in range(256) for component in (i, i, i))
+    mask = image(b"8_00", palette + b"\x00\x00\x80")
+    # Case-insensitive archive lookup must be identical for the root image
+    # and its mask, including CP932 pairs containing ASCII-looking trails.
+    for stem in (b"BUTTON", bytes((0x83, 0x5c)) + b"BUTTON"):
+        check("case_normalized_mask_" + stem.hex(), [
+            (stem + b".RCT", image(b"TC00", base)),
+            (stem.lower() + b"_.RC8", mask)],
+            None, bytes([3, 2, 1, 255, 6, 5, 4, 127]), [2, 1])
+    colored_palette = bytes(component for i in range(256) for component in (255-i, 7, i//2))
+    check("mask_uses_index_not_palette", [
+        (b"color.rct", image(b"TC00", base)),
+        (b"color_.rc8", image(b"8_00", colored_palette + b"\x00\x00\x80"))],
+        None, bytes([3, 2, 1, 255, 6, 5, 4, 127]), [2, 1])
     manifest = read_json(ROOT / "config/player_samples.json")
     # The unit fixture suite can rewrite its report concurrently. Derive this
     # test's real-game inputs directly from its manifest, not another receipt.

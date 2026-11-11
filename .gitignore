@@ -54,3 +54,4 @@ __pycache__/
 
 # Generated game scripts are not emulator source.
 /runtime/*.iet
+/player/patches/

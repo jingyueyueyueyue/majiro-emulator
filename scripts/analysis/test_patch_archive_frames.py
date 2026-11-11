@@ -53,6 +53,12 @@ def main():
                         inverse=Image.eval(image.getchannel("A"),lambda value:255-value).convert("P")
                         inverse.putpalette([value for i in range(256)for value in(i,i,i)])
                         return inverse.convert("RGBA"),inverse
+                if resolved not in startup.resources:
+                    assert metadata["width"]==1 and metadata["height"]==1
+                    indexed=metadata["depth"]==8
+                    image=Image.new("P"if indexed else"RGBA",(1,1),0)
+                    if indexed:image.putpalette([value for i in range(256)for value in(i,i,i)])
+                    return image.convert("RGBA"),image if indexed else None
                 item=startup.resource(resolved);raw=item.read()
                 if raw.startswith((b"\x89PNG",b"BM")):
                     image=Image.open(io.BytesIO(raw));image.load()

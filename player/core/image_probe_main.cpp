@@ -59,7 +59,7 @@ static int inspect(const std::filesystem::path& path, const std::filesystem::pat
         active.erase(key);
         return image;
     };
-    auto first = archive.members.front().raw_name;
+    auto first = key_for(archive.members.front().raw_name);
     auto image = pixels(first);
     if (first.size() > 4 && first.substr(first.size() - 4) == ".rct") {
         auto mask = first.substr(0, first.size() - 4) + "_.rc8";

@@ -42,6 +42,9 @@ def run():
         [("$event_hook","FIXTURE",0x12345678,1),("lock","FIXTURE",0x12345678,1),
          ("$event_release","FIXTURE",0x12345678,1),("unlock","FIXTURE",0x12345678,1),
          ("$event_release","FIXTURE",0x12345678,1)],
+        [("$event_hook","FIXTURE\0suffix",0x12345678,1),
+         ("$event_hook_after","FIXTURE",0x12345679,1),
+         ("$event_release","FIXTURE\0different",0x12345678,1)],
     ]
     for sample in samples:
         try:
@@ -58,7 +61,8 @@ def run():
         counts,failures=Counter(),Counter()
         for program,discard in[(program,discard)for program in programs for discard in(False,True)]:
             oracle.reset_events()
-            lua,_,_,system=registered_providers()
+            lua,_,_,system=registered_providers(overrides={
+                "event_controls": {"release_registers_hook": oracle.release_registers_hook}})
             mod=lua.execute((ROOT/"player/runtime/majiro_vm.lua").read_text(encoding="utf-8"))
             ops=lua.execute((ROOT/"player/tables/opcodes.lua").read_text(encoding="utf-8"))
             vm=lua.eval("""
@@ -100,7 +104,7 @@ def run():
                         native[row["event_hash"]].append((row["owner"],row["offset"],bool(row["protected"])))
                     portable=defaultdict(list)
                     for event_name,hooks in system["state"]["events"].items():
-                        key=zlib.crc32(event_name.encode("cp932"))
+                        key=zlib.crc32(event_name.split("\0",1)[0].encode("cp932"))
                         for _,hook in sorted(hooks.items()):
                             portable[key].append((hook["owner"]or 1,hook["offset"],bool(hook["protected"])))
                     if dict(native)!=dict(portable):
@@ -115,7 +119,8 @@ def run():
             "failures":failures[name],"status":"passed"if not failures[name]else"failed",
             "argument_counts":[2],"discard_modes":[False,True]}for name in sorted(counts)]
         report["samples"].append({"sample":sample["sample"],"exe_sha256":sample["exe_sha256"],
-            "calls":results,"native_list_head":oracle.event_head,"native_release_core":oracle.release_va})
+            "calls":results,"native_list_head":oracle.event_head,"native_release_core":oracle.release_va,
+            "release_registers_hook":oracle.release_registers_hook})
         print(f"{sample['sample']}: {sum(counts.values())} event operations; {sum(failures.values())} mismatches",flush=True)
     report["comparisons"]=sum(call["cases"]for row in report["samples"]for call in row["calls"])
     report["mismatches"]=sum(call["failures"]for row in report["samples"]for call in row["calls"])

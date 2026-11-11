@@ -32,8 +32,11 @@ function M.encode(root)
     if value==nil then append('Z\n')
     elseif kind=='boolean'then append(value and'B1\n'or'B0\n')
     elseif kind=='number'then
-      assert(value==value and value~=math.huge and value~=-math.huge,'non-finite snapshot number')
-      append('N'..string.format('%.17g',value)..'\n')
+      if value~=value then append('Fnan\n')
+      elseif value==math.huge then append('F+inf\n')
+      elseif value==-math.huge then append('F-inf\n')
+      elseif value==0 and 1/value==-math.huge then append('F-0\n')
+      else append('N'..string.format('%.17g',value)..'\n')end
     elseif kind=='string'then
       append('S'..#value..'\n')
       append((value:gsub('.',HEX)))
@@ -73,6 +76,12 @@ function M.decode(data)
     elseif kind=='N'then
       local n=tonumber(body)
       assert(n and n==n and n~=math.huge and n~=-math.huge,'invalid snapshot number');return n
+    elseif kind=='F'then
+      if body=='nan'then return 0/0
+      elseif body=='+inf'then return math.huge
+      elseif body=='-inf'then return -math.huge
+      elseif body=='-0'then return -1/math.huge end
+      error('invalid snapshot special number')
     elseif kind=='S'then
       local length=tonumber(body)
       assert(length and length>=0 and length%1==0 and length*2<=#data-position+1,'invalid snapshot string')
@@ -89,6 +98,7 @@ function M.decode(data)
       for _=1,length do
         local key=read(depth+1)
         assert(type(key)=='string'or type(key)=='number'or type(key)=='boolean','invalid snapshot key')
+        assert(type(key)~='number'or key==key,'invalid snapshot NaN key')
         assert(result[key]==nil,'duplicate snapshot key')
         result[key]=read(depth+1)
       end

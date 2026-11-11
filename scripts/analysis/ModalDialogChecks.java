@@ -43,6 +43,10 @@ public final class ModalDialogChecks {
         check(state.poll("replacement").equals("pending")&&state.owns(replacement));
         state.complete(replacement,1);
         check(state.poll("replacement").equals("result 1"));
+        ModalDialogState.Request editor=state.begin("editor",65537,"prompt","value");
+        state.completeData(editor,"first");
+        state.complete(editor,1);state.completeData(editor,"second");
+        check(state.poll("editor").equals("data 6669727374"));
         System.out.println("{\"status\":\"passed\",\"checks\":" + checks + "}");
     }
 }

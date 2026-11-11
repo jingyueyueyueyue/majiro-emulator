@@ -111,12 +111,14 @@ function M.install(state,options,emit,providers)
         script=vm:frame().script.name,offset=vm.current_offset}
       if console.enabled_history and not console.overlay_active then
         console.page_message=(console.page_message or'')..part
-        if not(profile.message_first_line_only and console.message_line_closed)then
-          console.last_message=(console.last_message or'')..part
-        end
         console.history_text=(console.history_text or'')..part
         console.history_page=console.history_page or{}
         console.history_page[#console.history_page+1]=copy(console.page[#console.page])
+      end
+      if not console.overlay_active and
+        (console.enabled_history or profile.history_suppresses_message==false)and
+        not(profile.message_first_line_only and console.message_line_closed)then
+        console.last_message=(console.last_message or'')..part
       end
       local face=state.settings.font_name or font[1]
       if not face or face==''or face=='ＭＳ ゴシック'or face=='MS Gothic'then
@@ -203,6 +205,9 @@ function M.install(state,options,emit,providers)
       console.x=console.configuration and console.configuration[2]or 0;notify('newline')
       emit(vm,'CRLF',{},nil)
     elseif command=='x' then
+      -- Early engines have no X_CONTROL handler and leave its operand on
+      -- the VM stack. The original control dispatcher supplies this flag.
+      if profile.x_control_event==false then return end
       local text,kind=vm:pop_typed()
       if kind~=2 then vm:fail('string text control operand required')end
       emit(vm,'X_CONTROL',{text},nil)

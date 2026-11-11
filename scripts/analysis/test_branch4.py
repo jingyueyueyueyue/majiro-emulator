@@ -34,8 +34,8 @@ def run():
         assert actual == expected, (frames, actual, expected)
         cases.append({"frames": frames, "after": actual})
     lua = create_lua()
-    lua.globals()["VM_MODULE"] = lua.execute((ROOT/"runtime/majiro_vm.lua").read_text(encoding="utf-8"))
-    lua.globals()["OPCODES"] = lua.execute((ROOT/"resources/scripts/opcodes.lua").read_text(encoding="utf-8"))
+    lua.globals()["VM_MODULE"] = lua.execute((ROOT/"player/runtime/majiro_vm.lua").read_text(encoding="utf-8"))
+    lua.globals()["OPCODES"] = lua.execute((ROOT/"player/tables/opcodes.lua").read_text(encoding="utf-8"))
     from test_vm import HARNESS
     lua.execute(HARNESS)
     # The child performs observable work after jmp.4 before returning.

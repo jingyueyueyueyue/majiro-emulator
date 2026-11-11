@@ -72,6 +72,10 @@ function M.install(define,state,options)
     -- fast mode. The generic audio wait below continues to own generation.
     local function waiting_audio()
       local wait=vm.waiting
+      if wait and wait.kind=='movie'and wait.generation and
+         (not media.movie or media.movie.generation~=wait.generation)then
+        vm.waiting=nil;return
+      end
       if wait and wait.audio_completion_wait then
         local spec=media.channels[wait.channel]
         if not spec or spec.generation~=wait.generation then vm.waiting=nil
@@ -97,6 +101,8 @@ function M.install(define,state,options)
   end
   media.replay=function(vm,spec)
     local elapsed=math.max(0,(spec.paused_at or wall_now())-spec.started)
+    -- Slot restore preserves current process-wide master settings.
+    spec.volume=effective(spec)
     local request={}
     for key,value in pairs(spec)do request[key]=value end
     if spec.loop_file and elapsed>=spec.duration_ms then
@@ -110,9 +116,12 @@ function M.install(define,state,options)
         request.offset_ms=elapsed%spec.duration_ms
       end
     end
-    host(vm,'play',request)
+    if host(vm,'play',request)==false then vm:fail('audio replay rejected by host')end
+    if spec.frequency and host(vm,'frequency',spec)==false then
+      vm:fail('restored music frequency rejected by host')
+    end
     if spec.paused_at~=nil then
-      if host(vm,'pause',spec)==false then media.channels[spec.id]=nil end
+      if host(vm,'pause',spec)==false then vm:fail('restored audio pause rejected by host')end
     end
   end
   define('$music_push',function(vm,args)
@@ -129,17 +138,22 @@ function M.install(define,state,options)
     local current=media.channels.music
     if current then host(vm,'stop',current)end
     media.channels.music=spec or nil
-    if spec then spec.started=wall_now();host(vm,'play',spec)end
+    if spec then
+      spec.started=wall_now();host(vm,'play',spec)
+      if spec.frequency and host(vm,'frequency',spec)==false then
+        vm:fail('popped music frequency rejected by host')
+      end
+    end
     return 0
   end)
   local function resolve_audio(name)
     -- Original 0x46C330 calls _splitpath, retaining only the filename
-    -- stem, then tries .wav before .ogg. MUSIC.CFG uses 過去\ prefixes
+    -- stem, then tries the engine's WAV/OGG preference. MUSIC.CFG uses 過去\ prefixes
     -- for three files which are stored at the archive root.
     local alias=options.audio_aliases and options.audio_aliases[name:lower()]
     local base=(alias or name):gsub('\\','/'):match('[^/]+$')or''
     local stem=base:gsub('%.[^%.]*$',''):lower()
-    for _,extension in ipairs{'.wav','.ogg'}do
+    for _,extension in ipairs((options.audio_controls or{}).extensions or{'.wav','.ogg'})do
       local candidate=stem..extension
       if options.resource_names[candidate]then return candidate end
     end
@@ -355,6 +369,9 @@ function M.install(define,state,options)
     -- Same original handle, hence same generation. Old completion callbacks
     -- must be rejected by the host's per-player ownership token.
     if host(vm,'replace',replacement)==false then vm:fail('audio replacement rejected by host')end
+    if replacement.frequency and host(vm,'frequency',replacement)==false then
+      vm:fail('replacement music frequency rejected by host')
+    end
     media.channels.music=replacement
     return 0
   end
@@ -471,14 +488,20 @@ function M.install(define,state,options)
   end)
   define('$movie_play',function(vm,args)
     assert(#args>=1 and #args<=6 and type(args[1])=='string')
+    for i=2,#args do assert(type(args[i])=='number','movie argument must be numeric')end
     local key=args[1]:gsub('\\','/'):match('[^/]+$'):lower()
     local asset=options.movies and options.movies[key]
     if not asset then vm:fail('movie resource missing: '..args[1])end
     if not options.movie then vm:fail('movie host provider missing')end
+    media.generation=media.generation+1
     local spec={file=asset.file,name=args[1],started=wall_now(),duration_ms=asset.duration_ms,
-      volume=media.movie_volume or 1000,skippable=true}
+      volume=media.movie_volume or 1000,skippable=true,generation=media.generation,
+      clear=args[2]==nil and 1 or args[2],x=args[3]or 0,y=args[4]or 0,
+      width=args[5]or options.width,height=args[6]or options.height}
+    if options.movie('play',spec)==false then vm:fail('movie playback rejected by host')end
+    if media.movie_texture then state.pages[media.movie_texture.page]=nil;media.movie_texture=nil end
     media.movie=spec
-    options.movie('play',spec);return 0
+    return 0
   end)
   local function movie_variant(vm,args,range)
     local minimum=range and 3 or 1
@@ -490,7 +513,9 @@ function M.install(define,state,options)
     if not asset then vm:fail('movie resource missing: '..args[1])end
     if not options.movie then vm:fail('movie host provider missing')end
     local base=range and 4 or 2
+    media.generation=media.generation+1
     local spec={file=asset.file,name=args[1],started=wall_now(),duration_ms=asset.duration_ms,
+      generation=media.generation,
       volume=media.movie_volume or 1000,skippable=true,repeat_play=not range,
       clear=args[base]==nil and 1 or args[base],x=args[base+1]or 0,y=args[base+2]or 0,
       width=args[base+3]or options.width,height=args[base+4]or options.height}
@@ -499,10 +524,10 @@ function M.install(define,state,options)
     end
     local action=range and'play_fromto'or'play_repeat'
     if options.movie(action,spec)==false then vm:fail('movie variant rejected by host: '..action)end
+    if media.movie_texture then state.pages[media.movie_texture.page]=nil;media.movie_texture=nil end
     media.movie=spec
-    -- Repeat/range native calls pump messages until playback exits. Keep the
-    -- portable owner thread responsive while the host reports the operation.
-    vm.waiting={kind='movie',until_ms=not spec.repeat_play and spec.started+spec.duration_ms or nil}
+    -- The native backend starts playback and registers its timer callback;
+    -- waiting belongs to the separate movie_wait call.
     return 0
   end
   define('$movie_play_repeat',function(vm,args)return movie_variant(vm,args,false)end)
@@ -534,6 +559,7 @@ function M.install(define,state,options)
     if previous and previous.page~=page then state.pages[previous.page]=nil end
     if page>=state.next_page then state.next_page=page+1 end
     state.pages[page]={width=width,height=height,depth=32,movie_texture=true}
+    media.movie=nil
     media.movie_texture=spec
     return 0
   end)
@@ -575,7 +601,8 @@ function M.install(define,state,options)
     if media.movie then
       if not options.movie then vm:fail('movie provider missing')end
       if options.movie('status',media.movie)~=0 then
-        vm.waiting={kind='movie',until_ms=media.movie.started+media.movie.duration_ms}
+        vm.waiting={kind='movie',generation=media.movie.generation,
+          until_ms=media.movie.started+media.movie.duration_ms}
       end
     end
     return 0

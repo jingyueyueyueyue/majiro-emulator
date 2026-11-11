@@ -12,28 +12,30 @@ import sys
 from audit_player_semantics import registered_providers, source_identity
 from original_strings import StringOracle
 from original_opcode import native_number
+from original_fixture_scope import profile_for, finish_scope
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "convert"))
 from port_common import ROOT, archive_dir, timestamp, write_json
 
 TEXTS = ("", "A", "a", "ab", "az", "Z", "0", "a/b", "a\\b",
          "\uff21", "\uff41", "\u0391", "\u03b1", "\u0410", "\u0430",
-         "\u3042", "\u30bd", "\uff76", "\u3000", "A\u30bd", "a\u30bd")
+         "\u3042", "\u30bd", "\uff76", "\u3000", "A\u30bd", "a\u30bd",
+         "A\0BC", "\0", "\0A")
 
 
 def syscall_cases(name):
     if name in ("$strcmp", "$stricmp", "$strstr", "$strmatch"):
         return itertools.product(TEXTS, repeat=2)
-    if name in ("$strlen", "$num_strsplit", "$strupr$", "$strlwr$", "$atoi"):
+    if name in ("$strlen", "$num_strsplit", "$strupr$", "$strlwr$", "$atoi", "$crc32str"):
         values = (*TEXTS, '  "one", two, , "three"  ', "1,2,3", ",,",
                   " -123x", "+2147483648", "9999999999999999999999")
         return [(text,) for text in values]
     if name in ("$strleft$", "$strright$"):
-        return itertools.product(("", "ABCDE", "A\u3042B\u30bd", "\uff21\uff22\uff23"), (-3, -1, 0, 1, 2, 5, 20))
+        return itertools.product(("", "ABCDE", "A\u3042B\u30bd", "\uff21\uff22\uff23", "A\0BC"), (-3, -1, 0, 1, 2, 5, 20))
     if name == "$strmid$":
-        return itertools.product(("", "ABCDE", "A\u3042B\u30bd"), (-2, 0, 1, 5), (-2, 0, 1, 3, 10))
+        return itertools.product(("", "ABCDE", "A\u3042B\u30bd", "A\0BC"), (-2, 0, 1, 5), (-2, 0, 1, 3, 10))
     if name == "$strsplit$":
-        return itertools.product(("A,B", " , ,C, ", '"A B",  "C"', "A\u3000,B\u3000"), (-1, 0, 1, 2, 8))
+        return itertools.product(("A,B", " , ,C, ", '"A B",  "C"', "A\u3000,B\u3000", "A\0,B"), (-1, 0, 1, 2, 8))
     return []
 
 
@@ -51,9 +53,22 @@ def run():
               "vm_sha256": before["files"]["player/runtime/majiro_vm.lua"]}
     for sample in samples:
         oracle = StringOracle(sample)
-        profile = profiles["executables"][sample["exe_sha256"]]
+        profile = profile_for(profiles, sample, report, required=(
+            "numeric", "minmax_arguments", "string_case", "integer_parse", "empty_search_absent"))
+        if profile is None:
+            continue
+        search_entry = next(entry for entry in calls[sample["sample"]]["entries"]
+                            if entry["name"] == "$strstr")
+        search_probe = oracle.execute("syscall", [(2, oracle.string("a", 1)),
+                                                  (2, oracle.string("A", 0))],
+                                      struct.pack("<IH", int(search_entry["hash"], 16), 2),
+                                      budget=200000)
+        search_sensitive = search_probe == [(0, 0xffffffff)]
+        assert search_probe in ([(0, 0)], [(0, 0xffffffff)])
         lua, _, _, system = registered_providers(profile["minmax_arguments"], profile["string_case"],
-                                                  profile["integer_parse"], profile["empty_search_absent"])
+                                                  profile["integer_parse"], profile["empty_search_absent"],
+                                                  overrides={"string_search_case_sensitive":
+                                                      search_sensitive})
         module = lua.execute((ROOT/"player/runtime/majiro_vm.lua").read_text(encoding="utf-8"))
         opcodes = lua.execute((ROOT/"player/tables/opcodes.lua").read_text(encoding="utf-8"))
         execute = lua.eval("""
@@ -114,6 +129,10 @@ def run():
                                                "args": args, "discard": discard, "reason": reason})
 
         for name in ("cle.s", "clt.s", "cge.s", "cgt.s", "ceq.s", "cne.s"):
+            if name not in oracle.rows:
+                report.setdefault("absent_original_opcodes", []).append(
+                    {"sample": sample["sample"], "opcode": name})
+                continue
             for args in itertools.product(TEXTS, repeat=2):
                 check(name, args)
         for name in ("ldstr", "add.s"):
@@ -121,7 +140,7 @@ def run():
                 check(name, args)
         wanted = {"$strcmp", "$stricmp", "$strlen", "$strstr", "$strmatch",
                   "$strleft$", "$strright$", "$strmid$", "$strsplit$", "$num_strsplit",
-                  "$strupr$", "$strlwr$", "$atoi"}
+                  "$strupr$", "$strlwr$", "$atoi", "$crc32str"}
         entries = {}
         for entry in calls[sample["sample"]]["entries"]:
             name = entry["name"]
@@ -151,8 +170,10 @@ def run():
                               for row in report["samples"])
     report["source_changed_during_test"] = source_identity() != before
     report["test_sources"] = {name: hashlib.sha256((ROOT/"scripts/analysis"/name).read_bytes()).hexdigest()
-                              for name in ("original_opcode.py", "original_strings.py", "test_string_semantics.py")}
+                              for name in ("original_opcode.py", "original_strings.py", "original_fixture_scope.py",
+                                           "original_comparison_profiles.py", "test_string_semantics.py")}
     report["status"] = "passed" if not report["mismatches"] and not report["source_changed_during_test"] else "failed"
+    finish_scope(report)
     folder = archive_dir("string_semantics")
     write_json(folder/(folder.name[:8]+"_string_semantics.json"), report)
     write_json(ROOT/"reports/string_semantics_tests.json", report)

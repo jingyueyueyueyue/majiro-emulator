@@ -93,12 +93,19 @@ def run():
              "$is_font_setup_fuchidori": ("fuchidori", 1)}
     for sample in samples:
         oracle = FontoutOracle(sample, by_name[sample["sample"]]["entries"])
-        profile = profiles[sample["exe_sha256"]]["text_controls"]
+        declared = profiles.get(sample["exe_sha256"])
+        if declared is None:
+            from original_comparison_profiles import recover
+            declared = dict(recover(sample["path"], sample["exe_sha256"], sample["sample"])["profile"])
+            declared["text_controls"] = oracle.profile()
+            report.setdefault("comparison_only_profiles", []).append({
+                "sample": sample["sample"], "profile": declared})
+        profile = declared["text_controls"]
         counts, failures, arities = Counter(), Counter(), {}
 
         def fixture(overrides=None):
             options = {"text_controls": profile,
-                       "integer_parse": profiles[sample["exe_sha256"]]["integer_parse"]}
+                       "integer_parse": declared["integer_parse"]}
             options.update(overrides or {})
             lua, _, _, system = registered_providers(overrides=options)
             system["state"]["frontbuffer"] = oracle.default_page

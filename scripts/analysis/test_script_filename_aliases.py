@@ -21,7 +21,7 @@ def main():
              "folder\\J06cChikan.mjs", "folder/J06cChikan.mjs",
              "C:\\folder\\J06cChikan.mjs", "C:J06cChikan.mjs",
              "name.other", "multi.part.mjs", "folder.with.dots/name.mjs",
-             "\u811a\u672c.mjs", "trailing.")
+             "\u811a\u672c.mjs", "trailing.", "name.mjs\0ignored")
     native = []
     for name in cases:
         pointer, stack = oracle.DATA + 0x90000, oracle.STACK + 0x8000
@@ -35,7 +35,7 @@ def main():
         esp = oracle.machine.reg_read(reg.UC_X86_REG_ESP)
         result = bytes(oracle.machine.mem_read(esp + 0x24, 256)).split(b"\0")[0].decode("cp932")
         native.append({"input": name, "original": result})
-    for runtime in ("player/runtime", "runtime"):
+    for runtime in ("player/runtime",):
         lua = create_lua()
         module = lua.execute((ROOT / runtime / "majiro_vm.lua").read_text(encoding="utf8"))
         requested = []
@@ -51,7 +51,7 @@ def main():
             assert value["name"].upper() == row["original"], (runtime, row, value["name"])
         assert all(not name.endswith(".mjs.mjo") for name in requested)
     report = {"status": "passed", "timestamp": timestamp(), "cases": native,
-              "runtime_copies": ["player/runtime", "runtime"],
+              "runtime_copies": ["player/runtime"],
               "original_exe_sha256": sample["exe_sha256"],
               "original_prefix_sha256": hashlib.sha256(
                   bytes(oracle.machine.mem_read(0x4070a0, 0x62))).hexdigest(),
@@ -59,7 +59,7 @@ def main():
               "scope": "original filename/extension normalization; story entry regression is a separate stage"}
     write_json(folder / "report.json", report)
     write_json(ROOT / "reports/script_filename_aliases.json", report)
-    print("Script filename aliases:", len(native), "original comparisons and both shared VMs passed")
+    print("Script filename aliases:", len(native), "original comparisons against the independent VM passed")
 
 
 if __name__ == "__main__":

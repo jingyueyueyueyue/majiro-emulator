@@ -14,13 +14,33 @@ final class TextMode {
         return "auto".equals(requested)?localPatch?"local":"original":requested;
     }
     static String resolve(String requested,PatchManifest patch,Resources resources) throws Exception {
-        if(!"auto".equals(requested))return effective(requested,false);
-        boolean available=!patch.rawMetadata.isEmpty()&&resources.file(patch.rawMetadata)
-            ||!patch.textPath.isEmpty()&&resources.file(patch.textPath);
-        for(String archive:patch.archives)available|=resources.file(archive);
-        for(PatchManifest.Layer layer:patch.layers)available|=resources.populated(layer.directory);
-        if(!patch.imageDirectory.isEmpty())available|=resources.populated(patch.imageDirectory);
-        return effective(requested,available);
+        if(!valid(requested))throw new IllegalArgumentException("unknown text mode");
+        if("original".equals(requested)||"online".equals(requested))return requested;
+        if(patch.legacy){
+            boolean found=resources.file(patch.rawMetadata)||resources.file(patch.textPath)
+                ||resources.populated("patches/local/archives");
+            for(PatchManifest.Layer layer:patch.layers)found|=resources.populated(layer.directory);
+            if(found)throw new IllegalArgumentException("local text resources require patches/manifest.json");
+            if("local".equals(requested))throw new IllegalArgumentException("no verified local text layer");
+            return "original";
+        }
+        boolean available=patch.hasText();
+        for(String archive:patch.archives)
+            if(!patch.imageArchives.contains(archive)&&!patch.archiveEncodings.containsKey(archive))
+                throw new IllegalArgumentException("local archive has no declared text encoding: "+archive);
+        if(!available){
+            if("local".equals(requested))throw new IllegalArgumentException("no verified local text layer");
+            return "original";
+        }
+        if(!patch.rawMetadata.isEmpty()&&!resources.file(patch.rawMetadata))
+            throw new IllegalArgumentException("declared raw metadata missing");
+        if(!patch.textPath.isEmpty()&&!resources.file(patch.textPath))
+            throw new IllegalArgumentException("declared text adapter missing");
+        for(String archive:patch.archives)if(!resources.file(archive))
+            throw new IllegalArgumentException("declared local archive missing: "+archive);
+        for(PatchManifest.Layer layer:patch.layers)if(!resources.populated(layer.directory))
+            throw new IllegalArgumentException("declared local script layer missing or empty: "+layer.directory);
+        return effective(requested,true);
     }
     private TextMode(){}
 }

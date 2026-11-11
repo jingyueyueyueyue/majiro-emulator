@@ -64,12 +64,18 @@ function M.install(define,state,options)
   return{license=check_license,
     poll=function(vm)
       if not current then return false end
+      vm:save_thread()
       local owner=vm.threads[current.thread]
-      if not owner or owner.finished or current.generation~=vm.context_generation then
+      if not owner or owner.finished or owner.terminate_requested or current.generation~=vm.context_generation then
         local token=current.token;current=nil;vm.external_checker=nil
         pcall(checker_host,vm,'checker_cancel',token)
         state.external_checker_error='external checker owner context no longer exists'
         vm:fail(state.external_checker_error)
+      end
+      if not owner.waiting or owner.waiting.kind~='external_checker'or owner.waiting.token~=current.token then
+        local token=current.token;current=nil;vm.external_checker=nil
+        pcall(checker_host,vm,'checker_cancel',token)
+        vm:fail('external checker owner continuation changed')
       end
       local result=checker_host(vm,'checker_poll',current.token)
       if result=='pending'then return true end

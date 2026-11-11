@@ -29,8 +29,8 @@ end
 class VMTests(unittest.TestCase):
     def setUp(self):
         self.lua = create_lua()
-        self.lua.globals()["VM_MODULE"] = self.lua.execute((ROOT / "runtime/majiro_vm.lua").read_text(encoding="utf-8"))
-        self.lua.globals()["OPCODES"] = self.lua.execute((ROOT / "resources/scripts/opcodes.lua").read_text(encoding="utf-8"))
+        self.lua.globals()["VM_MODULE"] = self.lua.execute((ROOT / "player/runtime/majiro_vm.lua").read_text(encoding="utf-8"))
+        self.lua.globals()["OPCODES"] = self.lua.execute((ROOT / "player/tables/opcodes.lua").read_text(encoding="utf-8"))
         self.lua.execute(HARNESS)
 
     def test_integer_width_and_negative_remainder(self):
@@ -42,6 +42,23 @@ class VMTests(unittest.TestCase):
           assert(finish(v));return {v.globals[1][123],v.globals[1][124]}
         """)
         self.assertEqual(table_value(got), [-2147483648, -1])
+
+    def test_archive_canonical_alias_keeps_one_script_registration(self):
+        result = self.lua.execute(r"""
+          local loaded=0
+          local v=VM_MODULE.new{opcodes=OPCODES,syscall=function()return 0 end,
+            script_loaded=function()loaded=loaded+1 end,
+            loader=function(name)
+              assert(name=='alias.mjo' or name=='canonical.mjo')
+              return{name='canonical.mjo',main=0,functions={{12,0}},code={{0,0x191}}}
+            end}
+          local original=v:load('canonical')
+          local alias=v:load('alias')
+          assert(original==alias and v.functions[12].script==original)
+          v:load('canonical\0ignored.mjs')
+          return{loaded,#v.load_order,#v.duplicate_functions}
+        """)
+        self.assertEqual(table_value(result), [1, 1, 0])
 
     def test_full_width_multiply_and_shift(self):
         got = self.lua.execute("""
@@ -199,7 +216,7 @@ class VMTests(unittest.TestCase):
 
     def test_checkpoint_keeps_real_stack_type_at_an_integer_valued_float(self):
         self.lua.globals()["CODEC"] = self.lua.execute(
-            (ROOT/"runtime/majiro_codec.lua").read_text(encoding="utf-8"))
+            (ROOT/"player/runtime/majiro_codec.lua").read_text(encoding="utf-8"))
         got=self.lua.execute("""
           local code={{0,0x803,1},{6,0x800,0},{12,0x270,32+2048,7,-1},{22,0x82b}}
           local v=makevm(code)
@@ -232,8 +249,8 @@ class VMTests(unittest.TestCase):
     def test_source_thread_call_keeps_integral_float_parameter(self):
         from audit_player_semantics import registered_providers
         lua, _, _, system = registered_providers()
-        lua.globals()["MOD"] = lua.execute((ROOT/"runtime/majiro_vm.lua").read_text(encoding="utf-8"))
-        lua.globals()["OPS"] = lua.execute((ROOT/"resources/scripts/opcodes.lua").read_text(encoding="utf-8"))
+        lua.globals()["MOD"] = lua.execute((ROOT/"player/runtime/majiro_vm.lua").read_text(encoding="utf-8"))
+        lua.globals()["OPS"] = lua.execute((ROOT/"player/tables/opcodes.lua").read_text(encoding="utf-8"))
         lua.globals()["INVOKE"] = system["invoke"]
         got=lua.execute("""
           local script={name='thread-types',main=0,functions={{42,100}},

@@ -15,8 +15,11 @@ from port_common import ROOT,archive_dir,timestamp,write_json
 
 def run():
     folder=archive_dir("graphics_batch_checks");pixels=Pixels()
-    sample=json.loads((ROOT/"reports/opcode_dispatch.json").read_text(encoding="utf8"))["samples"][-1]
-    entries=json.loads((ROOT/"reports/syscall_dispatch.json").read_text(encoding="utf8"))["samples"][-1]["entries"]
+    from original_x86 import Original
+    sample=next(row for row in json.loads((ROOT/"reports/opcode_dispatch.json").read_text(encoding="utf8"))["samples"]
+                if row["exe_sha256"]==Original.IDENTITY)
+    entries=next(row["entries"] for row in json.loads((ROOT/"reports/syscall_dispatch.json").read_text(encoding="utf8"))["samples"]
+                 if row["exe_sha256"]==Original.IDENTITY)
     cases=[]
     for source_mask,dest_mask in((False,False),(True,False),(False,True),(True,True)):
         o=GraphicsOracle(sample,entries);source=bytes((30,60,90,255))*256;dest=bytes((60,90,120,255))*256

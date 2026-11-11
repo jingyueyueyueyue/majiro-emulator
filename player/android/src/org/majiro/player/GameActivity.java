@@ -97,7 +97,9 @@ public final class GameActivity extends SDLActivity {
             DiagnosticLog.write("game","launch "+getIntent().getStringExtra("game_title"));
             GameBridge.open(this,getIntent().getStringExtra("game_tree"),getIntent().getStringExtra("game_root"));
         } catch (Exception error) {
-            throw new IllegalStateException("Cannot open selected game directory", error);
+            // Let the native owner show its normal error dialog and cleanly
+            // return to the library instead of crashing during Activity setup.
+            GameBridge.launchFailed(error);
         }
         super.onCreate(state);
         settingsOverlay=new GameSettingsOverlay(this);

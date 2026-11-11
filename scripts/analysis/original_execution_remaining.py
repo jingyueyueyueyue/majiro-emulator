@@ -35,7 +35,7 @@ class ExecutionOracle(CallOracle):
         table_reads = [index for index, row in enumerate(body)
                        if row.mnemonic == "mov" and len(row.operands) == 2
                        and row.operands[1].type == capstone.CS_OP_MEM
-                       and row.operands[1].mem.disp == 0xA4]
+                       and row.operands[1].mem.disp == self.code_base_offset]
         if len(table_reads) != 1:
             raise ValueError("original call_sub target-table accessor changed")
         calls = [row.operands[0].imm for row in body[:table_reads[0]]
@@ -101,7 +101,7 @@ class ExecutionOracle(CallOracle):
                 {"code_base": library_code, "functions": []if missing else[(function_hash, 300)]}])
             for record, name in zip(records, ("caller.mjo", "callee.mjo", "library.mjo")):
                 source.machine.mem_write(record, name.encode("ascii") + b"\0")
-                source.write_u32(record + 0x94, 0)
+                source.write_u32(record + source.function_count_offset + 8, 0)
             source.records = records
             if returning:
                 types=[kind for kind,_ in parameters]

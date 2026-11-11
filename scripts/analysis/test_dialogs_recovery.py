@@ -30,8 +30,9 @@ def run():
     samples=json.loads((ROOT/"reports/opcode_dispatch.json").read_text(encoding="utf8"))["samples"]
     dispatch={row["sample"]:row["entries"]for row in
               json.loads((ROOT/"reports/syscall_dispatch.json").read_text(encoding="utf8"))["samples"]}
+    signatures=ROOT/"reports/player_call_signatures.json"
     sites={row["sample"]:row["signatures"]for row in
-           json.loads((ROOT/"reports/player_call_signatures.json").read_text(encoding="utf8"))["samples"]}
+           json.loads(signatures.read_text(encoding="utf8"))["samples"]}if signatures.exists()else{}
     report={"schema":1,"timestamp":timestamp(),"status":"running","samples":[],"failures":[],
             "scope":"all 15 native dialog wrappers, original Majiro argument concatenation, flags, "
                 "production-mode guard and result conversion at terminal MessageBoxA boundary",
@@ -57,7 +58,7 @@ def run():
                   "discard_modes":[False,True],"flags":set(),"icons":set(),
                   "buttons":set(),"response_map":{},"production_modes":{},
                   "script_signatures":[{"argc":site["argc"],"opcode":site["opcode"]}
-                    for site in sites[sample["sample"]]if site["hash"]==entry["hash"]]}
+                    for site in sites.get(sample["sample"],[])if site["hash"]==entry["hash"]]}
             for mode in(-1,0,1,2):
                 for index,args in enumerate(fixture_sets):
                     # Each arity has retain/discard coverage. Extra modes

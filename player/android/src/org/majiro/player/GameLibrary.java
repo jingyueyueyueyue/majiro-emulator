@@ -53,12 +53,17 @@ public final class GameLibrary {
         if(!context.getSharedPreferences("library",0).edit().putString("games",list.toString()).commit())
             throw new IllegalStateException("无法保存游戏库");
     }
-    public synchronized void played(Entry e) throws Exception {e.lastPlayed=System.currentTimeMillis();save();}
+    static Entry currentEntry(java.util.List<Entry> entries,String id){
+        for(Entry entry:entries)if(entry.id.equals(id))return entry;
+        throw new IllegalStateException("selected game is no longer in the library");
+    }
+    public synchronized Entry current(String id){return currentEntry(entries,id);}
+    public synchronized void played(Entry e) throws Exception {current(e.id).lastPlayed=System.currentTimeMillis();save();}
     public synchronized void rename(Entry e,String name) throws Exception {
         if(name.trim().isEmpty())throw new IllegalArgumentException("名称不能为空");
-        e.title=name.trim();save();
+        current(e.id).title=name.trim();save();
     }
-    public synchronized void remove(Entry e) throws Exception {entries.remove(e);save();}
+    public synchronized void remove(Entry e) throws Exception {entries.remove(current(e.id));save();}
     private ArrayList<Document> children(Uri tree,String id) throws Exception {
         ArrayList<Document> result=new ArrayList<Document>();
         try(Cursor cursor=context.getContentResolver().query(
@@ -87,7 +92,7 @@ public final class GameLibrary {
             for(Entry e:found) {
                 Entry old=null;for(Entry value:entries)if(value.id.equals(e.id)){old=value;break;}
                 if(old==null)entries.add(e);
-                else {old.tree=e.tree;old.formats=e.formats;if(!e.icon.isEmpty())old.icon=e.icon;}
+                else {old.tree=e.tree;old.root=e.root;old.formats=e.formats;old.icon=e.icon;}
             }
             save();
         }

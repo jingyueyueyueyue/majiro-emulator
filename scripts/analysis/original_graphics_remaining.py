@@ -28,8 +28,8 @@ class GraphicsOracle(CallOracle):
         self.functions = NativeFunctions(self)
         self.cursor = self.DATA + 0x30000
         f=self.functions
-        root=f.syscall_helper(self.entries["$grp_mulcopy"])
-        self.optional_mulcopy_coordinates=any(row.mnemonic=="cmp"and
+        root=f.syscall_helper(self.entries.get("$grp_mulcopy",self.entries["$grp_copy"]))
+        self.optional_mulcopy_coordinates="$grp_mulcopy" in self.entries and any(row.mnemonic=="cmp"and
             len(row.operands)==2 and row.operands[1].type==capstone.CS_OP_IMM
             and row.operands[1].imm==7 for row in f.body(root))
         candidates=[]
@@ -37,7 +37,7 @@ class GraphicsOracle(CallOracle):
             body=f.body(target)
             if (target!=root and len(body)>30)or not any(row.mnemonic=="mov"and len(row.operands)==2
                 and row.operands[1].type==capstone.CS_OP_MEM
-                and row.operands[1].mem.disp in(0x34,0x38) for row in body):continue
+                and row.operands[1].mem.disp in(0x30,0x34,0x38) for row in body):continue
             globals_=[row.operands[1].mem.disp for row in body if row.mnemonic=="mov"
                 and len(row.operands)==2 and row.operands[1].type==capstone.CS_OP_MEM
                 and not row.operands[1].mem.base and not row.operands[1].mem.index]
@@ -45,11 +45,11 @@ class GraphicsOracle(CallOracle):
             if len(set(globals_))==1:
                 link=next(row.operands[1].mem.disp for row in body if row.mnemonic=="mov"
                     and len(row.operands)==2 and row.operands[1].type==capstone.CS_OP_MEM
-                    and row.operands[1].mem.base and row.operands[1].mem.disp in(0x34,0x38))
+                    and row.operands[1].mem.base and row.operands[1].mem.disp in(0x30,0x34,0x38))
                 candidates.append((globals_[0],link))
         if len(set(candidates))!=1:raise ValueError("original page validation list changed")
         self.page_head,self.page_link=candidates[0];self.write_u32(self.page_head,0)
-        self.pixel_offset=0x28 if self.page_link==0x34 else 0x2c
+        self.pixel_offset=self.page_link-12
         self.registered_pages=[]
         root=f.syscall_helper(self.entries["$make_mosaic"])
         roots=f.body(root);rand_calls={}
@@ -65,9 +65,15 @@ class GraphicsOracle(CallOracle):
                 tls=next(row.operands[0].imm for row in body if row.mnemonic=="call")
                 candidates.append(tls)
         if len(candidates)!=1:raise ValueError("original mosaic random stream changed")
-        self.random_state=self.DATA+0x6e000
-        def thread_data(uc,at,size,unused):self._return(0,self.random_state)
-        self.machine.hook_add(unicorn.UC_HOOK_CODE,thread_data,begin=candidates[0],end=candidates[0])
+        modern=getattr(self,"modern_crt_evidence",None)
+        if modern and modern["thread_get"]==candidates[0]:
+            # StringOracle already owns this CRT TLS getter. Installing a
+            # second returning hook pops two guest frames and skips rand.
+            self.random_state=self.DATA+0x6a000
+        else:
+            self.random_state=self.DATA+0x6e000
+            def thread_data(uc,at,size,unused):self._return(0,self.random_state)
+            self.machine.hook_add(unicorn.UC_HOOK_CODE,thread_data,begin=candidates[0],end=candidates[0])
         self.seed(1)
 
     def memory(self, data):
@@ -80,7 +86,7 @@ class GraphicsOracle(CallOracle):
 
     def page(self, width, height, data, depth=32, mask=None):
         self.cursor = max(self.cursor, self.DATA + 0x30000)
-        if depth==32 and self.pixel_offset==0x28:
+        if depth==32 and self.pixel_offset!=0x2c:
             data=b"".join(data[at:at+3]for at in range(0,len(data),4))
             depth=24
         stride = width * (depth // 8)
@@ -104,6 +110,19 @@ class GraphicsOracle(CallOracle):
 
     def seed(self,value):self.write_u32(self.random_state+0x14,value)
     def random_seed(self):return self.read_u32(self.random_state+0x14)
+
+    def extcopy_profile(self):
+        cursor,registered,head=self.cursor,list(self.registered_pages),self.read_u32(self.page_head)
+        try:
+            self.cursor=self.DATA+0x30000;self.registered_pages=[];self.write_u32(self.page_head,0)
+            source=self.page(1,1,b"\x7f",8);target=self.page(1,1,b"\x03",8)
+            self.call_graphics("$grp_extcopy",[source["page"],0,0,1,1,target["page"],0,0,0])
+            value=bytes(self.machine.mem_read(target["pixels"],1))
+            if value not in(b"\x03",b"\x7f"):raise ValueError("unclassified indexed extcopy")
+            return {"color_bytes":4 if self.pixel_offset==0x2c else 3,
+                    "indexed_extcopy":value==b"\x7f"}
+        finally:
+            self.cursor=cursor;self.registered_pages=registered;self.write_u32(self.page_head,head)
 
     def call_graphics(self, name, args, discard=False):
         entry = self.entries[name]

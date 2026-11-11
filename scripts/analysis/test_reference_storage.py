@@ -10,6 +10,7 @@ import sys
 
 from audit_player_semantics import registered_providers,source_identity
 from original_strings import StringOracle
+from original_fixture_scope import profile_for, finish_scope
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"convert"))
 from port_common import ROOT,archive_dir,timestamp,write_json
@@ -27,7 +28,10 @@ def run():
     texts=("","A","a","\uff21","\uff41","\u3042","A\u30bd")
     for sample in samples:
         oracle=StringOracle(sample)
-        profile=profiles["executables"][sample["exe_sha256"]]
+        profile=profile_for(profiles,sample,report,required=(
+            "numeric","minmax_arguments","string_case","integer_parse","empty_search_absent"))
+        if profile is None:
+            continue
         lua,_,_,system=registered_providers(profile["minmax_arguments"],profile["string_case"],
                                             profile["integer_parse"],profile["empty_search_absent"])
         mod=lua.execute((ROOT/"player/runtime/majiro_vm.lua").read_text(encoding="utf-8"))
@@ -117,8 +121,10 @@ def run():
     report["mismatches"]=sum(sum(row["failures"].values())for row in report["samples"])
     report["source_changed_during_test"]=source_identity()!=before
     report["test_sources"]={name:hashlib.sha256((ROOT/"scripts/analysis"/name).read_bytes()).hexdigest()
-        for name in("original_opcode.py","original_strings.py","test_reference_storage.py")}
+        for name in("original_opcode.py","original_strings.py","original_fixture_scope.py",
+                    "original_comparison_profiles.py","test_reference_storage.py")}
     report["status"]="passed"if not report["mismatches"]and not report["source_changed_during_test"]else"failed"
+    finish_scope(report)
     folder=archive_dir("reference_storage")
     write_json(folder/(folder.name[:8]+"_reference_storage.json"),report)
     write_json(ROOT/"reports/reference_storage_tests.json",report)

@@ -1,6 +1,14 @@
 -- All options are retained as actual state; host consumers use the same table.
 local M={}
 function M.install(define,state,options)
+  if options.ultra_fast_mode_available==false then
+    local register=define
+    local unavailable={['$set_ultra_fast_mode']=true,['$ultra_fast_enable']=true,
+      ['$ultra_fast_disable']=true,['$is_ultra_fast_mode']=true,['$reset_ultra_fast_mode']=true}
+    define=function(name,provider)
+      if not unavailable[name]then register(name,provider)end
+    end
+  end
   local s=state.settings
   state.registry=options.registry or {}
   s.nanido=tonumber((options.saved_settings or{}).nanido)or tonumber(state.registry.nanido)or 0

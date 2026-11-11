@@ -1,5 +1,38 @@
 -- Character-based operations over UTF-8 display strings, with CP932 hashing.
 local M={}
+local function cstring(text)return text:match('^[^%z]*')end
+local crc_table,nibble_xor
+local function xor32(a,b)
+  local out,power=0,1
+  while a>0 or b>0 do
+    out=out+nibble_xor[a%16][b%16]*power
+    a,b,power=math.floor(a/16),math.floor(b/16),power*16
+  end
+  return out
+end
+local function prepare_crc()
+  if crc_table then return end
+  nibble_xor={}
+  for a=0,15 do
+    local row={};nibble_xor[a]=row
+    for b=0,15 do
+      local x,y,out,power=a,b,0,1
+      for _=1,4 do
+        if x%2~=y%2 then out=out+power end
+        x,y,power=math.floor(x/2),math.floor(y/2),power*2
+      end
+      row[b]=out
+    end
+  end
+  crc_table={}
+  for index=0,255 do
+    local value=index
+    for _=1,8 do
+      value=value%2==1 and xor32(math.floor(value/2),0xedb88320)or math.floor(value/2)
+    end
+    crc_table[index]=value
+  end
+end
 local fullwidth_lower={}
 for i=0,25 do
   local byte=0xa1+i
@@ -13,7 +46,7 @@ function M.resource_key(text)
 end
 local function characters(text)
   local out={}
-  for char in text:gmatch('[%z\1-\127\194-\244][\128-\191]*')do out[#out+1]=char end
+  for char in cstring(text):gmatch('[\1-\127\194-\244][\128-\191]*')do out[#out+1]=char end
   return out
 end
 local multibyte_lower={}
@@ -26,32 +59,35 @@ do
   end
 end
 function M.install(define,state,options)
+  local hash_cache,hash_count={},0
   local function crc(text)
+    text=cstring(text)
     local bytes=options.cp932 and options.cp932(text)or text
+    -- Cache the encoded bytes, so a mode/tunnel encoder change cannot reuse
+    -- a hash of different source data. Always run the strict encoder first.
+    local cached=hash_cache[bytes]
+    if cached~=nil then return cached end
+    prepare_crc()
     local value=0xffffffff
-    local function xor(a,b)
-      local out,p=0,1
-      for _=1,32 do
-        if a%2~=b%2 then out=out+p end
-        a,b,p=math.floor(a/2),math.floor(b/2),p*2
-      end
-      return out
-    end
     for i=1,#bytes do
-      value=xor(value,bytes:byte(i))
-      for _=1,8 do value=value%2==1 and xor(math.floor(value/2),0xedb88320)or math.floor(value/2)end
+      value=xor32(math.floor(value/256),crc_table[xor32(value%256,bytes:byte(i))])
     end
-    return xor(value,0xffffffff)
+    value=0xffffffff-value
+    if #bytes<=256 then
+      if hash_count>=256 then hash_cache={};hash_count=0 end
+      hash_cache[bytes]=value;hash_count=hash_count+1
+    end
+    return value
   end
   local function fold(text)
-    text=text:lower():gsub('[\239][\188][\161-\186]',fullwidth_lower)
+    text=cstring(text):lower():gsub('[\239][\188][\161-\186]',fullwidth_lower)
     if options.string_case=='cp932' then
       text=text:gsub('[%z\1-\127\194-\244][\128-\191]*',multibyte_lower)
     end
     return text
   end
   local function uppercase(text)
-    text=text:upper():gsub('[\239][\189][\129-\154]',function(char)
+    text=cstring(text):upper():gsub('[\239][\189][\129-\154]',function(char)
       return string.char(0xef,0xbc,char:byte(3)+0x20)
     end)
     if options.string_case=='cp932'then
@@ -108,11 +144,11 @@ function M.install(define,state,options)
   end
   define('$strlen',function(vm,args)assert(#args==1);return #characters(args[1])end)
   define('$strleft$',function(vm,args)
-    assert(#args==2);if args[2]<0 then return args[1] end
+    assert(#args==2);if args[2]<0 then return cstring(args[1]) end
     return slice(args[1],0,args[2])
   end)
   define('$strright$',function(vm,args)
-    assert(#args==2);if args[2]<0 then return args[1]end
+    assert(#args==2);if args[2]<0 then return cstring(args[1])end
     local chars=characters(args[1]);return slice(args[1],math.max(0,#chars-args[2]),args[2])
   end)
   define('$strmid$',function(vm,args)
@@ -121,8 +157,10 @@ function M.install(define,state,options)
   end)
   define('$strstr',function(vm,args)
     assert(#args==2)
-    if options.empty_search_absent and args[1]==''then return -1 end
-    local found=fold(args[1]):find(fold(args[2]),1,true)
+    if options.empty_search_absent and cstring(args[1])==''then return -1 end
+    local left,right=cstring(args[1]),cstring(args[2])
+    if not options.string_search_case_sensitive then left,right=fold(left),fold(right)end
+    local found=left:find(right,1,true)
     return found and #characters(args[1]:sub(1,found-1)) or -1
   end)
   -- The syscall wrappers compare argument two to argument one. Bytecode
@@ -132,6 +170,7 @@ function M.install(define,state,options)
   define('$strupr$',function(vm,args)assert(#args==1);return uppercase(args[1])end)
   define('$strlwr$',function(vm,args)assert(#args==1);return fold(args[1])end)
   local function split(text)
+    text=cstring(text)
     local result={}
     for value in (text..','):gmatch('(.-),')do
       -- Original 0x430AA8 strips bytes <= 0x20 from each comma field,
@@ -159,7 +198,11 @@ function M.install(define,state,options)
     if negative then result=-result end
     return ((result+2147483648)%4294967296)-2147483648
   end)
-  define('$crc32str',function(vm,args)assert(#args==1);return crc(args[1])end)
+  -- This public helper folds before hashing; event/function hashes do not.
+  define('$crc32str',function(vm,args)
+    assert(#args==1)
+    return(crc(fold(args[1]))+2147483648)%4294967296-2147483648
+  end)
   local function variable(vm,name)
     if not name:find('@',2,true)then name=name..'@GLOBAL'end
     local scope=({['#']=0,['@']=1,['%']=2})[name:sub(1,1)]
@@ -206,7 +249,7 @@ function M.install(define,state,options)
       end
       pieces[index]=table.concat(bytes)
     end
-    local raw=table.concat(pieces)
+    local raw=cstring(table.concat(pieces))
     assert(#raw<2048,'chr$ exceeds original string buffer')
     if options.decode_bytes then return options.decode_bytes(raw)end
     if raw:find('[\128-\255]')then vm:fail('CP932 byte decoder unavailable for chr$')end

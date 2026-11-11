@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+import argparse
 
 from audit_player_semantics import registered_providers,source_identity
 from original_audio import AudioOracle
@@ -15,9 +16,13 @@ from port_common import ROOT,archive_dir,timestamp,write_json
 
 
 def run():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--sample",action="append")
+    args=parser.parse_args()
     samples=json.loads((ROOT/"reports/opcode_dispatch.json").read_text(encoding="utf-8"))["samples"]
     dispatch=json.loads((ROOT/"reports/syscall_dispatch.json").read_text(encoding="utf-8"))["samples"]
     by_name={row["sample"]:row for row in dispatch};before=source_identity()
+    if args.sample:samples=[row for row in samples if row["sample"]in args.sample]
     programs=[["$music_pause"],["$music_resume"],["$music_pause","$music_pause"],
               ["$music_pause","$music_resume","$music_pause"],
               ["$music_resume","$music_pause","$music_resume"],
@@ -28,6 +33,14 @@ def run():
         "limits":["audio worker scheduling and actual device pause/resume are verified separately"],
         "complete_engine_semantics":False}
     for sample in samples:
+        names={row["name"]for row in by_name[sample["sample"]]["entries"]}
+        if "$music_pause"not in names or "$music_resume"not in names:
+            missing=sorted({"$music_pause","$music_resume"}-names)
+            report["samples"].append({"sample":sample["sample"],"exe_sha256":sample["exe_sha256"],
+                "calls":[],"status":"not_applicable","absent_public_apis":missing,
+                "evidence":"complete original syscall dispatch; extended audio is tested separately"})
+            print(sample["sample"]+": not applicable; absent "+", ".join(missing),flush=True)
+            continue
         oracle=AudioOracle(sample,by_name[sample["sample"]]["entries"])
         counts,failures=Counter(),Counter()
         for program in programs:

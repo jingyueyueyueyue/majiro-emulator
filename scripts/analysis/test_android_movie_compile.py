@@ -2,6 +2,7 @@
 from __future__ import annotations
 import hashlib
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -30,6 +31,11 @@ def main():
                                          "-s","org.majiro.player.GameBridge"],text=True)
     assert "(Ljava/lang/String;Ljava/lang/String;IZJJ)I"in descriptors
     assert "movieFrame()"in descriptors and "()[I"in descriptors
+    declared=dict(re.findall(r"public static[^;\n]+? (\w+)\([^;\n]*\)[^;\n]*;\s+descriptor: ([^\s]+)",descriptors))
+    host=(source/"game_host.cpp").read_text(encoding="utf8")
+    required=set(re.findall(r'method\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\)',host))
+    for name,signature in required:
+        assert declared.get(name)==signature,(name,signature,declared.get(name))
     compiler=sdk/"ndk/28.2.13676358/toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe"
     command=[str(compiler),"--target=aarch64-linux-android26","-std=c++20","-O2","-fPIC",
              "-I"+str(ROOT/"references/player/lua/src"),
@@ -42,6 +48,7 @@ def main():
     report={"schema":1,"timestamp":timestamp(),"status":"passed",
             "java_sources":len(sources),"movie_descriptor":"(Ljava/lang/String;Ljava/lang/String;IZJJ)I",
             "frame_descriptor":"()[I","jni_android_compile":"arm64_api26",
+            "verified_jni_descriptors":len(required),
             "source_sha256":{name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest()for name in(
                 "player/android/src/org/majiro/player/MovieTextures.java",
                 "player/android/src/org/majiro/player/GameBridge.java",

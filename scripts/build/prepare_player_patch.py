@@ -51,7 +51,7 @@ def build(destination=None):
         record["text_replacements"]=replacements
         data["scripts"][member.name.lower()]=record
     reviewed.finish()
-    destination=destination or ROOT/"player/patches/ruri/majiro_metadata.lua"
+    destination=destination or ROOT/"localization/player/ruri/majiro_metadata.lua"
     encoded=("-- Data only: source hashes, verified repairs and text substitutions; no compiled MJO code.\nreturn "+
              lua_value(data)+"\n").encode("utf8")
     atomic_bytes(destination,encoded)

@@ -85,15 +85,16 @@ class AudioCompletionOracle(NumberedAudioOracle):
         self.prepare_numbered(7, previous=present, active=active, completed=completed, fast=fast)
         self.reset_music(present)
         self.write_u32(self.sound_handles+7*4, self.music_handle if present else 0)
-        self.write_u32(self.stream+0x650, int(active))
-        self.write_u32(self.stream+0x648, int(completed))
-        self.write_u32(self.stream+0x624, 1)
-        self.write_u32(self.stream+0x654, 0)
-        self.write_u32(self.stream+0x658, 0xABCD)
-        self.write_u32(self.stream+0x67C, 1)
-        self.write_u32(self.stream+0x698, 0)
-        self.write_u32(self.stream+0x674, 0)
-        self.write_u32(self.stream+0x65C, 777)
+        self.write_u32(self.stream_field(0x650), int(active))
+        self.write_u32(self.stream_field(0x648), int(completed))
+        self.write_u32(self.stream_field(0x624), 1)
+        if "$music_replace"in self.entries:
+            self.write_u32(self.stream+0x654, 0)
+            self.write_u32(self.stream+0x658, 0xABCD)
+            self.write_u32(self.stream+0x67C, 1)
+            self.write_u32(self.stream+0x698, 0)
+        self.write_u32(self.stream_field(0x674), 0)
+        self.write_u32(self.stream_field(0x65C), 777)
         if self.tick_global:
             self.write_u32(self.tick_global, self.clock)
         for at in self.vfs_ready:
@@ -140,11 +141,11 @@ class AudioCompletionOracle(NumberedAudioOracle):
                 "wait_deadline": self.read_u32(self.frame+wait_offset),
                 "music_handle": self.read_u32(self.music_slot),
                 "sound_handle": self.read_u32(self.sound_handles+7*4),
-                "active": bool(self.read_u32(self.stream+0x650)),
-                "completed": bool(self.read_u32(self.stream+0x648)),
+                "active": bool(self.read_u32(self.stream_field(0x650))),
+                "completed": bool(self.read_u32(self.stream_field(0x648))),
                 "replace_requested": bool(self.read_u32(self.stream+0x654)),
                 "replace_flags": native_number(0, self.read_u32(self.stream+0x658)),
                 "replace_first": first.decode("cp932"), "replace_second": second.decode("cp932"),
                 "replacement_finished": self.read_u32(self.stream+0x67C),
-                "fade_requested": bool(self.read_u32(self.stream+0x674)),
-                "fade_duration": native_number(0, self.read_u32(self.stream+0x664))}
+                "fade_requested": bool(self.read_u32(self.stream_field(0x674))),
+                "fade_duration": native_number(0, self.read_u32(self.stream_field(0x664)))}

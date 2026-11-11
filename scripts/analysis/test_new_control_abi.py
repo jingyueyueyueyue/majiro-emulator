@@ -112,9 +112,9 @@ def main():
             resume=function(self,action)self.action=action end}
         end""")()
         assert system["providers"]["$do_event_single"](vm, lua.table_from([-1, "ABI_EVENT", 10, 20, 30, 40, 50]), False) == (None, True)
-        # No hooks registered: the sequence is empty but retains the exact
-        # wants/discard continuation. Event core execution has separate tests.
-        assert vm["action"]["done"]["wants"] is False
+        # An empty event list injects no callbacks and needs no synthetic
+        # continuation. Full owner/frame execution has its own oracle.
+        assert vm["action"] is None
         rows.append({"sample": label, "hash": "29f1ac40", "argc": 7, "opcode": "syscallp",
                      "status": "passed", "cases": 2,
                      "scope": "argc-2 payload forwarding, current-thread -1 alias and discard flag",

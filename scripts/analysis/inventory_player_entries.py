@@ -22,15 +22,18 @@ def family(name):
 def run():
     before=source_identity()
     lua,names,providers,system=registered_providers()
-    games={Path(row["directory"]).name:row for row in read_json(ROOT/"reports/majiro_samples.json")["games"]}
+    games={row.get("id")or Path(row["directory"]).name:row for row in read_json(ROOT/"reports/majiro_samples.json")["games"]}
     dispatch=list(read_json(ROOT/"reports/syscall_dispatch.json")["samples"])
     supplemental=ROOT/"reports/new_sample_scan.json"
     if supplemental.exists():
         extra=read_json(supplemental)
         by_directory={row["directory"]:row for row in extra["games"]}
-        for row in extra["differences"]:
+        for game in extra["games"]:
+            games[game.get("id")or Path(game["directory"]).name]=game
+        for row in extra.get("differences",[]):
             games[row["sample"]]=by_directory[row["directory"]]
-        dispatch.extend(extra["syscall_samples"])
+        existing={row["exe_sha256"]for row in dispatch}
+        dispatch.extend(row for row in extra["syscall_samples"]if row["exe_sha256"]not in existing)
     rows={}
     samples=[]
     for sample in dispatch:

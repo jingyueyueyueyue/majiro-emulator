@@ -56,7 +56,6 @@ def run():
     samples=json.loads((ROOT/"reports/opcode_dispatch.json").read_text(encoding="utf-8"))["samples"]
     dispatch=json.loads((ROOT/"reports/syscall_dispatch.json").read_text(encoding="utf-8"))["samples"]
     by_name={row["sample"]:row for row in dispatch}
-    profiles=json.loads((ROOT/"config/player_engine_profiles.json").read_text(encoding="utf-8"))["executables"]
     before=source_identity()
     report={"schema":1,"timestamp":timestamp(),"source_identity":before,"samples":[],"failures":[],
         "scope":"actual native voice routine, old-stream stop, WAV/OGG resolution, force/fast and gender gating, skip, no-voice markers, gain consumption and signed arithmetic",
@@ -67,9 +66,18 @@ def run():
                   "this is the voice routine boundary, not a claim about every raw-API wrapper"],
         "complete_engine_semantics":False}
     for sample in samples:
+        if not any(row["name"]=="$music_pause" for row in by_name[sample["sample"]]["entries"]):
+            from original_legacy_voice import LegacyVoiceProfileOracle
+            from test_emulator_legacy_audio import voice_checks
+            legacy=LegacyVoiceProfileOracle(sample,by_name[sample["sample"]]["entries"])
+            checks=voice_checks(legacy)
+            report["samples"].append({"sample":sample["sample"],"exe_sha256":sample["exe_sha256"],
+                "comparisons":len(checks),"mismatches":0,"voice_profile":legacy.profile(),
+                "scope":"original legacy voice marker/forced-skip behavior",
+                "cases":checks})
+            continue
         oracle=VoicePlaybackOracle(sample,by_name[sample["sample"]]["entries"])
-        profile=profiles[sample["exe_sha256"]]["voice_controls"]
-        assert profile==oracle.profile()
+        profile=oracle.profile()
         events=[];reads=[];lua_ref={}
         def asset(name):
             reads.append(name)

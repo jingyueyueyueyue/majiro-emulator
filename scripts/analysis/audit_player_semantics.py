@@ -189,15 +189,18 @@ def audit(scan_calls=True):
     opdispatch = json.loads((ROOT / "reports/opcode_dispatch.json").read_text(encoding="utf-8"))
     lua, names, providers, _ = registered_providers()
     definitions = opcode_table()
-    by_name = {Path(game["directory"]).name: game for game in inventory["games"]}
+    by_name = {game.get("id") or Path(game["directory"]).name: game for game in inventory["games"]}
     extra_scan=ROOT/"reports/new_sample_scan.json"
     if extra_scan.exists():
         extra=json.loads(extra_scan.read_text(encoding="utf8"))
         directories={game["directory"]:game for game in extra["games"]}
-        for row in extra["differences"]:
+        for game in extra["games"]:
+            by_name[game.get("id") or Path(game["directory"]).name] = game
+        for row in extra.get("differences", []):
             by_name[row["sample"]]=directories[row["directory"]]
-        sysdispatch["samples"].extend(extra["syscall_samples"])
-        opdispatch["samples"].extend(extra["opcode_samples"])
+        for target,key in ((sysdispatch,"syscall_samples"),(opdispatch,"opcode_samples")):
+            existing={row["exe_sha256"]for row in target["samples"]}
+            target["samples"].extend(row for row in extra[key]if row["exe_sha256"]not in existing)
     opcode_samples = {row["sample"]: row for row in opdispatch["samples"]}
     required = {}
     samples = []

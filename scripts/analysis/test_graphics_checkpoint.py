@@ -10,7 +10,7 @@ from port_common import ROOT,write_json
 
 def run():
     lua=create_lua()
-    compact=lua.execute((ROOT/"runtime/majiro_graphics_checkpoint.lua").read_text(encoding="utf8"))["compact"]
+    compact=lua.execute((ROOT/"player/runtime/majiro_graphics_checkpoint.lua").read_text(encoding="utf8"))["compact"]
     native=Pixels()
     cases=[]
     fixtures=[

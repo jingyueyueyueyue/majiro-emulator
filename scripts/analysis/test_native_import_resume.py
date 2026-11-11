@@ -21,7 +21,7 @@ def main():
     parser.add_argument("--sample",choices=("narci_onetwo","narci_himeko"),default="narci_onetwo")
     args=parser.parse_args();legacy=args.sample=="narci_himeko"
     evidence=archive_dir("native_import_resume")
-    dispatch=json.loads((ROOT/"reports/opcode_dispatch.json").read_text())["samples"]
+    dispatch=json.loads((ROOT/"reports/opcode_dispatch.json").read_text(encoding="utf8"))["samples"]
     sample=next(row for row in dispatch if row["sample"]==args.sample)
     games=json.loads((ROOT/"reports/majiro_samples.json").read_text(encoding="utf8"))["games"]
     game=next(row for row in games if Path(row["directory"]).name==args.sample)
@@ -126,9 +126,10 @@ def main():
         result=codec["clone"](script_lua)
         if loader_state["changed"]:result["source_sha256"]="f"*64
         return result
-    def new_vm(system,persistent=None):
+    def new_vm(system,persistent=None,array_stride=False):
         return module("runtime/majiro_vm.lua")["new"](lua.table_from({
             "loader":load_script,"opcodes":module("scripts/opcodes.lua"),"syscall":system["invoke"],
+            "array_3d_legacy_stride":array_stride,
             "numeric_profile":"x87"if legacy else"sse32","persistent_globals":persistent}))
     vm=new_vm(system)
     vm["begin"](vm,member.name)
@@ -195,6 +196,16 @@ def main():
     try:saves["plan_native_import"](vm,invalid,manifest)
     except Exception:failed=True
     assert failed and vm["status"]=="finished"
+    # This neutral continuation does not index arrays. Exercise both declared
+    # VM layouts solely to verify importer/staging propagation, without claiming
+    # the original sample itself uses the alternate layout.
+    for stride in(False,True):
+        target=new_vm(system,array_stride=stride);target["begin"](target,member.name)
+        imported=system["saves"]["plan_native_import"](target,
+            lua.table_from(descriptor,recursive=True),manifest)
+        assert imported["packet"]["vm"]["array_3d_legacy_stride"]==stride
+        system["saves"]["import_native"](target,imported)
+        assert target["export_state"](target)["array_3d_legacy_stride"]==stride
     env=msvc_environment();compiler=Path(env["VCTOOLSINSTALLDIR"])/"bin/Hostx64/x64/cl.exe"
     definitions=opcode_table()
     header="#pragma once\n#include <array>\n#include <cstdint>\nnamespace majiro{struct Opcode{uint16_t code;const char* encoding;};\n"
@@ -220,6 +231,7 @@ def main():
         "system_values_merged":True,"readmark_lines_merged":True,"readmark_text_offsets_merged":True,
         "unsupported_handler_rejected":True,"stale_scene_reset":True,"plan_tamper_rejected":True,
         "source_change_before_commit_rejected":True,"new_provider_vm_cold_restore":True,
+        "array_index_profile_propagation":[False,True],
         "native_import_scope":"explicitly verified idle root with neutral scene and empty stack",
         "full_original_game_save_import":False,"device_tests_executed":False,
         "evidence":str(evidence.relative_to(ROOT)),

@@ -16,8 +16,9 @@ from build_player_native import build
 from port_common import ROOT, archive_dir, player_pixels_library as native_pixels_library, sha256, timestamp, write_json
 
 
-def run():
-    build()
+def run(compile_provider=False):
+    if compile_provider:
+        build()
     before=source_identity()
     folder=archive_dir("graphics_remaining_tests")
     samples=json.loads((ROOT/"reports/opcode_dispatch.json").read_text(encoding="utf-8"))["samples"]

@@ -15,9 +15,10 @@ from port_common import ROOT, archive_dir, read_json, timestamp, write_json
 
 # Suite success is a regression result. The independent semantic inventory
 # remains the acceptance gate and does not infer full coverage from this list.
+# Profile recovery is a separate research command: regression runs must not
+# regenerate runtime sources or replace production feature discovery.
 SUITES = (
     "test_sprite_alpha_terminal",
-    "recover_numeric_profiles",
     "test_numeric_semantics",
     "test_storage_semantics",
     "test_load_semantics",
@@ -97,10 +98,42 @@ SUITES = (
     "test_engine_format_recognition",
     "test_engine_features",
     "test_text_mode",
+    "test_engine_production_profiles",
+    "test_player_snapshot_numbers",
+    "test_player_file_numbers",
+    "test_player_readmark_owners",
+    "test_player_primary_thread",
+    "test_player_hashing",
+    "test_player_graphics_edges",
+    "test_player_graphics_contract",
+    "test_player_extcopy_overlap",
+    "test_player_page_lifetimes",
+    "test_player_sprite_interpolation",
+    "test_player_tile_code_integrity",
+    "test_emulator_host_restore",
+    "test_emulator_audio_fades",
+    "test_emulator_movie_lifecycle",
+    "test_emulator_dialog_owners",
+    "test_emulator_sdl_input",
+    "test_emulator_document_media_io",
+    "test_emulator_legacy_audio",
 )
+from run_emulator_host_audit import CASES as HOST_SUITES
+SUITES = tuple(dict.fromkeys((*SUITES, *HOST_SUITES,
+    "test_player_core", "test_player_images", "test_vm", "test_branch4",
+    "test_array_indices", "test_script_filename_aliases", "test_event_dispatch_semantics",
+    "test_cross_thread_events", "test_hover_transition_order", "test_archive_layers",
+    "test_sprite_argument_forms", "test_tile_actions",
+    "test_player_pixel_transactions", "test_player_capture_sequences",
+    "test_player_history_clear", "test_player_screen_coordinates",
+    "test_graphics_batch", "test_sprite_variable_geometry", "test_new_sprite_sequences",
+    "test_native_pixels", "test_original_blend", "test_original_effects", "test_original_swap",
+    "test_drawmodes", "test_remaining_pixel_calls", "test_graphics_checkpoint",
+    "test_text_raster", "test_tile_routines", "test_tiles_extra", "test_capture_cache_batch",
+    "test_text_ui_batch")))
 
 # These suites read immutable source/EXE inputs and publish separate reports.
-# Builds, generated-profile recovery and host/model suites stay sequential.
+# Builds and host/model suites stay sequential.
 PARALLEL_SUITES = frozenset({
     "test_numeric_semantics","test_storage_semantics","test_load_semantics",
     "test_control_semantics","test_case_semantics","test_return_semantics",
@@ -139,8 +172,9 @@ def main():
     stages.append("audit_player_semantics")
     def execute(name):
         log = folder / f"{folder.name[:8]}_{name}.txt"
-        command = [sys.executable, "-B", "-X", "utf8",
-                   "scripts/analysis/" + name + ".py"]
+        command = [sys.executable, "-B", "-X", "utf8", *(
+            ["scripts/analysis/audit_player_semantics.py"] if name=="audit_player_semantics" else
+            ["scripts/build/run_emulator_audit.py","--case",name])]
         began = time.monotonic()
         with log.open("wb") as output:
             process = subprocess.Popen(command, cwd=ROOT, stdout=output, stderr=subprocess.STDOUT)

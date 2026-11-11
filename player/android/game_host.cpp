@@ -3,6 +3,7 @@
 #include "../core/image_resource.hpp"
 #include "../core/lua_script.hpp"
 #include "../core/portable_pixels.hpp"
+#include "../core/text_resource.hpp"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include "render_recovery.hpp"
@@ -45,14 +46,18 @@ int screen_width, screen_height;
 uint64_t began, clock_adjust;
 std::string root_uri;
 std::string translation_mode="original";
-struct PatchLayer{std::string directory,kind;};
+std::string runtime_text_encoding="cp932";
+struct PatchLayer{std::string directory,kind,encoding;};
 std::vector<PatchLayer> patch_layers;
-struct Source { int descriptor; uint64_t bytes; majiro::Archive archive;std::string name;bool active=true;bool image_only=false; };
+struct Source { int descriptor; uint64_t bytes; majiro::Archive archive;std::string name;bool active=true;bool image_only=false;std::string scope="original"; };
 struct Entry { size_t archive; majiro::Member member; std::string name; };
 std::vector<Source> sources;
 std::vector<size_t> source_order;
 std::map<std::string, Entry> members;
 std::set<std::string> loose_names;
+std::map<std::string,std::string> text_snapshot;
+bool text_snapshot_ready=false;
+majiro::TextSnapshotCache text_bytes;
 std::map<std::string, majiro::Image> image_cache;
 std::map<std::string,bool> png_transparency_cache;
 std::vector<uint8_t> password;
@@ -159,37 +164,54 @@ std::vector<uint8_t> read_at(int descriptor, uint64_t offset, size_t size) {
     return result;
 }
 void verify_patch_member(const std::string& name,const std::vector<uint8_t>& raw);
-void push_source_script(lua_State* state,const std::string& name,const std::vector<uint8_t>& raw,bool patched);
-std::string decode_source(const std::vector<uint8_t>& raw,bool patched);
-bool read_patch(const std::string& name,std::vector<uint8_t>& bytes,bool& patched){
-    patched=false;
+void verify_text_resource(const std::string& name,const std::vector<uint8_t>& raw,const majiro::TextSource& source);
+void push_source_script(lua_State* state,const std::string& name,const std::vector<uint8_t>& raw,const majiro::TextSource& source);
+std::string decode_source(const std::vector<uint8_t>& raw,const majiro::TextSource& source);
+bool read_patch(const std::string& name,std::vector<uint8_t>& bytes,majiro::TextSource& source){
+    source={};
     if(translation_mode!="local")return false;
     for(const auto& layer:patch_layers){
         const auto normalized=key(name);
+        if(layer.kind!="pinned_raw_patch"&&!majiro::text_resource_member(normalized))continue;
         if(layer.kind=="source_mjo"&&!normalized.ends_with(".mjo"))continue;
         bool found=false;auto raw=java_read(layer.directory+"/"+normalized,false,&found);
         if(!found)continue;
-        patched=layer.kind=="pinned_raw_patch";
-        if(patched)verify_patch_member(name,raw);
+        source={layer.kind=="encoded_text"?layer.encoding:layer.kind,layer.directory+"/"+normalized};
+        verify_text_resource(name,raw,source);
         bytes=std::move(raw);return true;
     }
     return false;
 }
-std::vector<uint8_t> read_member(const std::string& name,bool* patch_source=nullptr) {
-    if(patch_source)*patch_source=false;
+std::vector<uint8_t> read_member(const std::string& name,majiro::TextSource* provenance=nullptr) {
+    need(!key(name).starts_with("patches/"),"direct patch access bypasses resource mode: "+name);
     // A raw translation overlay is data, never a precompiled Lua program.
-    bool patched=false;std::vector<uint8_t> overlay;
-    if(read_patch(name,overlay,patched)){
-        if(patch_source)*patch_source=patched;
+    majiro::TextSource source;std::vector<uint8_t> overlay;
+    const auto normalized=key(name);
+    if(text_snapshot_ready&&text_bytes.get(normalized,overlay,source)){
+        if(provenance)*provenance=source;
+        return overlay;
+    }
+    if(read_patch(name,overlay,source)){
+        if(majiro::text_resource_member(normalized))text_bytes.put(normalized,overlay,source);
+        if(provenance)*provenance=source;
         return overlay;
     }
     bool loose=false;auto raw=java_read(name,false,&loose);
-    if(loose)return raw;
-    auto found = members.find(key(name)); need(found != members.end(), "resource not found: " + name);
-    const auto& entry = found->second;
-    return read_at(sources[entry.archive].descriptor, entry.member.offset, entry.member.size);
+    if(loose)source={"original","loose/"+key(name)};
+    else{
+        auto found=members.find(key(name));need(found!=members.end(),"resource not found: "+name);
+        const auto& entry=found->second;const auto& owner=sources[entry.archive];
+        source={owner.scope,owner.name+"/"+key(name)};
+        raw=read_at(owner.descriptor,entry.member.offset,entry.member.size);
+    }
+    if(majiro::text_resource_member(normalized)){
+        verify_text_resource(name,raw,source);text_bytes.put(normalized,raw,source);
+    }
+    if(provenance)*provenance=source;
+    return raw;
 }
 void rebuild_members(){
+    text_bytes.clear();
     members.clear();
     for(auto index:source_order){
         const auto& source=sources[index];if(!source.active)continue;
@@ -279,8 +301,31 @@ void verify_patch_member(const std::string& name,const std::vector<uint8_t>& raw
         lua_settop(lua,base);
     }catch(...){lua_settop(lua,base);throw;}
 }
-std::string decode_source(const std::vector<uint8_t>& raw,bool patched){
-    if(!patched)return convert(raw,"windows-31j","UTF-8");
+void verify_text_resource(const std::string& name,const std::vector<uint8_t>& raw,const majiro::TextSource& source){
+    const auto digest=hash(raw),normalized=key(name);
+    const auto stamp=majiro::text_resource_stamp(source,digest);
+    auto expected=text_snapshot.find(normalized);
+    need((!text_snapshot_ready&&expected==text_snapshot.end())||
+        (expected!=text_snapshot.end()&&expected->second==stamp),
+        "text resource changed during or after launch; restart required: "+normalized);
+    const int base=lua_gettop(lua);
+    try{
+        lua_getglobal(lua,"PLAYER_VERIFY_TEXT_RESOURCE");
+        need(lua_isfunction(lua,-1),"text resource validator is not initialized");
+        lua_pushlstring(lua,normalized.data(),normalized.size());
+        lua_pushlstring(lua,digest.data(),digest.size());
+        lua_pushlstring(lua,source.scope.data(),source.scope.size());
+        lua_pushlstring(lua,source.path.data(),source.path.size());
+        if(lua_pcall(lua,4,0,0)!=0)throw std::runtime_error(argument(lua,-1));
+        lua_settop(lua,base);
+        text_snapshot.emplace(normalized,stamp);
+    }catch(...){lua_settop(lua,base);throw;}
+}
+std::string decode_source(const std::vector<uint8_t>& raw,const majiro::TextSource& source){
+    if(!source.raw_patch()){
+        try{return convert(raw,source.charset(),"UTF-8");}
+        catch(const std::exception&){throw std::runtime_error("invalid declared text encoding: "+source.path+" ["+source.scope+"]");}
+    }
     const int base=lua_gettop(lua);
     try{
         lua_getglobal(lua,"PLAYER_DECODE_PATCH");
@@ -291,10 +336,13 @@ std::string decode_source(const std::vector<uint8_t>& raw,bool patched){
         auto value=argument(lua,-1);lua_settop(lua,base);return value;
     }catch(...){lua_settop(lua,base);throw;}
 }
-void push_source_script(lua_State* state,const std::string& name,const std::vector<uint8_t>& raw,bool patched){
+void push_source_script(lua_State* state,const std::string& name,const std::vector<uint8_t>& raw,const majiro::TextSource& source){
+    const bool patched=source.raw_patch();
     std::vector<majiro::ScriptRelocation> repairs;
     const int base=lua_gettop(state);
-    const auto sha=hash(raw);
+    const auto pinned=text_snapshot.find(key(name));
+    need(pinned!=text_snapshot.end(),"script was not validated before decoding: "+name);
+    const auto sha=pinned->second.substr(pinned->second.size()-64);
     if(patched){
         try{
             lua_getglobal(state,"PLAYER_PATCH_METADATA");
@@ -325,7 +373,10 @@ void push_source_script(lua_State* state,const std::string& name,const std::vect
         }catch(...){lua_settop(state,base);throw;}
     }
     const auto data=patched?majiro::repair_script_jumps(raw,repairs):raw;
-    majiro::push_script(state,name,data,sha,[patched](const auto& bytes){return decode_source(bytes,patched);});
+    majiro::push_script(state,name,data,sha,[&source](const auto& bytes){return decode_source(bytes,source);});
+    text_field(state,"text_origin",source.scope);
+    text_field(state,"text_encoding",patched?"cp932-tunnel":source.charset());
+    text_field(state,"resource_path",source.path);
     if(patched){lua_pushboolean(state,1);lua_setfield(state,-2,"patch_source");}
 }
 std::vector<uint8_t> parse_hex(const std::string& hex) {
@@ -337,8 +388,8 @@ std::vector<uint8_t> parse_hex(const std::string& hex) {
 }
 void discover_password() {
     if (has_password) return;
-    bool patched=false;auto data = read_member("start.mjo",&patched);
-    push_source_script(lua,"start.mjo",data,patched);
+    majiro::TextSource source;auto data=read_member("start.mjo",&source);
+    push_source_script(lua,"start.mjo",data,source);
     lua_getfield(lua, -1, "code");
     std::string previous;
     int previous_opcode = 0;
@@ -455,32 +506,40 @@ int game_text(lua_State* state) {
     return 1;
 }
 int resource_text(lua_State* state) {
-    bool patched=false;auto bytes=read_member(argument(state,1),&patched);
-    auto text=decode_source(bytes,patched);
+    majiro::TextSource source;auto bytes=read_member(argument(state,1),&source);
+    auto text=decode_source(bytes,source);
     lua_pushlstring(state, text.data(), text.size()); return 1;
+}
+int pin_text_resource(lua_State* state){
+    read_member(argument(state,1));return 0;
 }
 int script_file_read(lua_State* state) {
     auto name=argument(state,1);auto path=java_string(name);
+    need(!key(name).starts_with("patches/"),"direct patch text access bypasses resource mode");
     auto data=static_cast<jbyteArray>(env->CallStaticObjectMethod(bridge,
         method("readScriptFile","(Ljava/lang/String;)[B"),path));
     env->DeleteLocalRef(path);checked_java();
     bool found=data!=nullptr;
     auto bytes=native_bytes(data);if(data)env->DeleteLocalRef(data);
-    bool patched=false;
+    majiro::TextSource source{found?runtime_text_encoding:"original","script-output/"+name};
     if(!found){
         auto entry=members.find(key(name));
-        if(entry!=members.end()||loose_names.count(key(name))){bytes=read_member(name,&patched);found=true;}
+        if(entry!=members.end()||loose_names.count(key(name))){bytes=read_member(name,&source);found=true;}
         else{
-            if(read_patch(name,bytes,patched))found=true;
-            else bytes=java_read(name,false,&found);
+            if(read_patch(name,bytes,source))found=true;
+            else{
+                bytes=java_read(name,false,&found);
+                if(found){source={"original","loose/"+key(name)};verify_text_resource(name,bytes,source);}
+            }
         }
     }
     if(!found){lua_pushnil(state);return 1;}
-    auto text=decode_source(bytes,patched);lua_pushlstring(state,text.data(),text.size());return 1;
+    auto text=decode_source(bytes,source);lua_pushlstring(state,text.data(),text.size());return 1;
 }
 int script_file_write(lua_State* state) {
     auto name=java_string(argument(state,1));auto input=argument(state,2);
-    auto raw=convert(std::vector<uint8_t>(input.begin(),input.end()),"UTF-8","windows-31j");
+    majiro::TextSource source{runtime_text_encoding,"script-output"};
+    auto raw=convert(std::vector<uint8_t>(input.begin(),input.end()),"UTF-8",source.charset());
     auto data=byte_array(raw);
     env->CallStaticVoidMethod(bridge,method("writeScriptFile","(Ljava/lang/String;[B)V"),name,data);
     env->DeleteLocalRef(name);env->DeleteLocalRef(data);checked_java();return 0;
@@ -494,6 +553,22 @@ int decode_bytes(lua_State* state){
     auto raw=argument(state,1);
     auto text=convert(std::vector<uint8_t>(raw.begin(),raw.end()),"windows-31j","UTF-8");
     lua_pushlstring(state,text.data(),text.size());return 1;
+}
+int encode_text(lua_State* state){
+    auto input=argument(state,1);majiro::TextSource source{argument(state,2),"VM string"};
+    auto text=convert({input.begin(),input.end()},"UTF-8",source.charset());
+    lua_pushlstring(state,text.data(),text.size());return 1;
+}
+int decode_text(lua_State* state){
+    auto input=argument(state,1);majiro::TextSource source{argument(state,2),"VM bytes"};
+    auto text=convert({input.begin(),input.end()},source.charset(),"UTF-8");
+    lua_pushlstring(state,text.data(),text.size());return 1;
+}
+int set_text_identity(lua_State* state){
+    auto identity=java_string(argument(state,1));runtime_text_encoding=argument(state,2);
+    majiro::TextSource{runtime_text_encoding,"VM encoding"}.charset();
+    env->CallStaticVoidMethod(bridge,method("textIdentity","(Ljava/lang/String;)V"),identity);
+    env->DeleteLocalRef(identity);checked_java();return 0;
 }
 int service(lua_State* state){
     auto action=java_string(argument(state,1)),value=java_string(argument(state,2));
@@ -521,6 +596,35 @@ int patch_configuration(lua_State* state){
         bridge,method("patchConfiguration","()Ljava/lang/String;")));checked_java();
     auto text=native_string(value);if(value)env->DeleteLocalRef(value);
     lua_pushlstring(state,text.data(),text.size());return 1;
+}
+int patch_resource_names(lua_State* state){
+    auto rows=static_cast<jobjectArray>(env->CallStaticObjectMethod(bridge,
+        method("patchResourceNames","()[Ljava/lang/String;")));checked_java();
+    lua_newtable(state);
+    for(jsize i=0;i<env->GetArrayLength(rows);++i){
+        auto item=static_cast<jstring>(env->GetObjectArrayElement(rows,i));auto value=native_string(item);
+        env->DeleteLocalRef(item);
+        lua_pushlstring(state,value.data(),value.size());lua_rawseti(state,-2,i+1);
+    }
+    env->DeleteLocalRef(rows);return 1;
+}
+int text_resource_names(lua_State* state){
+    std::set<std::string> names;
+    for(const auto& row:members)if(majiro::text_resource_member(row.first))names.insert(row.first);
+    auto rows=static_cast<jobjectArray>(env->CallStaticObjectMethod(bridge,
+        method("resourceNames","()[Ljava/lang/String;")));checked_java();
+    for(jsize i=0;i<env->GetArrayLength(rows);++i){
+        auto item=static_cast<jstring>(env->GetObjectArrayElement(rows,i));auto name=key(native_string(item));
+        env->DeleteLocalRef(item);
+        if(majiro::text_resource_member(name))names.insert(name);
+    }
+    env->DeleteLocalRef(rows);lua_newtable(state);int index=1;
+    for(const auto& name:names){lua_pushlstring(state,name.data(),name.size());lua_rawseti(state,-2,index++);}
+    return 1;
+}
+int seal_text_resources(lua_State* state){
+    need(!text_snapshot.empty(),"empty text resource snapshot");
+    text_snapshot_ready=true;return 0;
 }
 int member_names(lua_State* state) {
     lua_newtable(state); int index = 1;
@@ -555,6 +659,10 @@ int archive_control(lua_State* state){
         for(;index<sources.size();++index)if(key(sources[index].name)==name)break;
         if(index==sources.size()){
             auto path=java_string(name);
+            auto scope_value=static_cast<jstring>(env->CallStaticObjectMethod(bridge,
+                method("archiveScope","(Ljava/lang/String;)Ljava/lang/String;"),path));
+            checked_java();auto scope=native_string(scope_value);env->DeleteLocalRef(scope_value);
+            need(scope!="blocked","archive is outside active text mode");
             auto value=static_cast<jstring>(env->CallStaticObjectMethod(bridge,
                 method("openArchive","(Ljava/lang/String;)Ljava/lang/String;"),path));
             env->DeleteLocalRef(path);checked_java();auto row=native_string(value);env->DeleteLocalRef(value);
@@ -565,7 +673,7 @@ int archive_control(lua_State* state){
                 majiro::ReadAt read=[fd](uint64_t at,uint8_t* out,size_t count){
                     auto data=read_at(fd,at,count);std::copy(data.begin(),data.end(),out);
                 };
-                sources.push_back(Source{fd,bytes,majiro::read_archive(read,bytes),name,true});
+                sources.push_back(Source{fd,bytes,majiro::read_archive(read,bytes),name,true,scope=="images",scope});
             }catch(...){close(fd);throw;}
         }
         sources[index].active=true;
@@ -579,7 +687,9 @@ int identity(lua_State* state) {
         bridge,method("sourceIdentity","()Ljava/lang/String;")));checked_java();
     need(source!=nullptr,"game source identity unavailable");
     std::string identity=native_string(source);env->DeleteLocalRef(source);
-    for (const auto& row : sources)if(!row.image_only)identity += ":" + std::to_string(row.bytes);
+    need(text_snapshot_ready,"text identity requested before validation");
+    identity+="\ntext-resources-v2\n"+std::string(translation_mode=="local"?"local":"original");
+    for(const auto& row:text_snapshot)identity+="\n"+row.first+"\n"+row.second;
     auto result = hash(std::vector<uint8_t>(identity.begin(), identity.end()));
     lua_pushstring(state, result.c_str()); return 1;
 }
@@ -654,8 +764,8 @@ int image_asset(lua_State* state) {
 }
 int script(lua_State* state) {
     std::string name = argument(state, 1);
-    bool patched=false;auto data = read_member(name,&patched);
-    push_source_script(state,name,data,patched);
+    majiro::TextSource source;auto data=read_member(name,&source);
+    push_source_script(state,name,data,source);
     return 1;
 }
 int graphics(lua_State* state) {
@@ -939,13 +1049,14 @@ int movie(lua_State* state) {
             need(movie_page>0,"movie texture requires reserved page identifier");
         }
     }
-    int result=movie_command(action,field(state,2,"file"),int(numeric(state,2,"volume",1000)),
+    const bool detach=action=="checkpoint_detach";
+    int result=movie_command(detach?"stop":action,field(state,2,"file"),int(numeric(state,2,"volume",1000)),
                              boolean(state,2,"repeat_play"),jlong(numeric(state,2,"range_from")),
                              jlong(numeric(state,2,"range_to",-1)));
     if(playing)refresh_movie_frame();
     if(action=="status"&&result==0)movie_surface_active=false;
-    if(action=="stop"||action=="texture_stop"){
-        if(movie_page>0)majiro::pixels::command("release "+std::to_string(movie_page));
+    if(action=="stop"||action=="texture_stop"||detach){
+        if(movie_page>0&&!detach)majiro::pixels::command("release "+std::to_string(movie_page));
         movie_page=0;movie_texture_mode=false;movie_surface_active=false;movie_rgba={};
         presentation.movie.invalidate();
     }
@@ -971,6 +1082,9 @@ void host_functions() {
 #define HOST(NAME) lua_pushcfunction(lua, guarded<NAME>); lua_setfield(lua, -2, #NAME)
     HOST(asset_text); HOST(game_text); HOST(resource_text); HOST(cp932);
     HOST(decode_bytes);HOST(service);HOST(translation);HOST(text_mode);HOST(patch_configuration);
+    HOST(patch_resource_names);HOST(text_resource_names);HOST(seal_text_resources);
+    HOST(pin_text_resource);
+    HOST(encode_text);HOST(decode_text);HOST(set_text_identity);
     HOST(archive_control);
     HOST(script_file_read);HOST(script_file_write);
     HOST(member_names); HOST(identity); HOST(engine_requirements); HOST(image_metadata); HOST(image_asset); HOST(script);
@@ -984,6 +1098,7 @@ void host_functions() {
     lua_setglobal(lua, "HOST");
 }
 void initialize_sources() {
+    env->CallStaticVoidMethod(bridge,method("requireReady","()V"));checked_java();
     auto mode=static_cast<jstring>(env->CallStaticObjectMethod(bridge,
         method("translationMode","()Ljava/lang/String;")));checked_java();
     translation_mode=native_string(mode);if(mode)env->DeleteLocalRef(mode);
@@ -993,9 +1108,9 @@ void initialize_sources() {
     checked_java();need(layers!=nullptr,"patch layer declarations unavailable");
     for(jsize i=0;i<env->GetArrayLength(layers);++i){
         auto value=static_cast<jstring>(env->GetObjectArrayElement(layers,i));auto row=native_string(value);
-        env->DeleteLocalRef(value);auto tab=row.find('\t');
-        need(tab!=std::string::npos,"invalid patch layer declaration");
-        patch_layers.push_back({row.substr(tab+1),row.substr(0,tab)});
+        env->DeleteLocalRef(value);auto tab=row.find('\t'),last=row.find('\t',tab+1);
+        need(tab!=std::string::npos&&last!=std::string::npos,"invalid patch layer declaration");
+        patch_layers.push_back({row.substr(tab+1,last-tab-1),row.substr(0,tab),row.substr(last+1)});
     }
     env->DeleteLocalRef(layers);
     auto list = static_cast<jobjectArray>(env->CallStaticObjectMethod(bridge, method("archives", "()[Ljava/lang/String;")));
@@ -1014,8 +1129,10 @@ void initialize_sources() {
         int fd = std::stoi(row.substr(first + 1, second - first - 1));
         const auto third=row.find('\t',second+1);
         uint64_t size = std::stoull(row.substr(second+1,third==std::string::npos?third:third-second-1));
-        const bool image_only=third!=std::string::npos&&row.substr(third+1)=="images";
-        need(third==std::string::npos||image_only,"unknown archive resource scope");
+        const auto scope=third==std::string::npos?std::string("original"):row.substr(third+1);
+        const bool image_only=scope=="images";
+        need(scope=="original"||image_only||scope=="cp932"||scope=="cp936"||scope=="utf-8"||
+            scope=="untyped_local","unknown archive resource scope");
         majiro::ReadAt read = [fd](uint64_t at, uint8_t* out, size_t count) {
             auto bytes = read_at(fd, at, count); std::copy(bytes.begin(), bytes.end(), out);
         };
@@ -1027,7 +1144,7 @@ void initialize_sources() {
             members.emplace(key(name), Entry{index, member, name});
         }
         source_order.push_back(index);
-        sources.push_back(Source{fd, size, std::move(archive),row.substr(0,first),true,image_only});
+        sources.push_back(Source{fd, size, std::move(archive),row.substr(0,first),true,image_only,scope});
     }
     need(!sources.empty(), "no game archives found");
 }
@@ -1306,19 +1423,23 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** 
                 else if (event.type == SDL_EVENT_WILL_ENTER_BACKGROUND) {
                     if (!paused) paused_at = SDL_GetTicks();
                     paused = true; render_paused=true; held = 0;
+                    key_down.clear();buttons=0;pressed.clear();input_activity=0;
                 } else if (event.type == SDL_EVENT_DID_ENTER_FOREGROUND) {
                     if (paused) began += SDL_GetTicks() - paused_at;
                     paused = false;render_paused=false;
                     presentation.event(SDL_EVENT_DID_ENTER_FOREGROUND);
                 }
-                else if (event.type == SDL_EVENT_MOUSE_MOTION) { x = event.motion.x; y = event.motion.y; }
-                else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+                else if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST){
+                    key_down.clear();held=0;buttons=0;pressed.clear();
+                }
+                else if (!paused && event.type == SDL_EVENT_MOUSE_MOTION) { x = event.motion.x; y = event.motion.y; }
+                else if (!paused && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                     x = event.button.x; y = event.button.y;
                     int bit = event.button.button == SDL_BUTTON_RIGHT ? 2 : 1;
                     buttons |= bit; held |= bit;
-                } else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+                } else if (!paused && event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
                     int bit = event.button.button == SDL_BUTTON_RIGHT ? 2 : 1; held &= ~bit;
-                } else if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) {
+                } else if (!paused && (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP)) {
                     bool down=event.type==SDL_EVENT_KEY_DOWN;
                     int code=0;
                     auto key=event.key.key;
@@ -1430,6 +1551,8 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** 
     majiro::pixels::install({});
     for (const auto& source : sources) close(source.descriptor);
     sources.clear();source_order.clear(); members.clear();loose_names.clear(); image_cache.clear();png_transparency_cache.clear(); audio_cache.clear();
+    text_snapshot.clear();text_snapshot_ready=false;
+    text_bytes.clear();
     password.clear();has_password=false;key_down.clear();cursor_warp_pending=false;
     for (auto& client : debug_clients) close(client.descriptor);
     debug_clients.clear();
@@ -1440,6 +1563,7 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** 
     movie_texture_mode=false;movie_surface_active=false;movie_clear_background=false;
     screen_width=screen_height=0;root_uri.clear();
     translation_mode="original";
+    runtime_text_encoding="cp932";
     patch_layers.clear();
     if(script_cursor)SDL_DestroyCursor(script_cursor);script_cursor=nullptr;
     if (renderer) SDL_DestroyRenderer(renderer); renderer = nullptr;

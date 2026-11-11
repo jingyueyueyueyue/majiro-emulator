@@ -9,6 +9,11 @@
 namespace majiro {
 namespace {
 void need(bool ok, const char* why) { if (!ok) throw std::runtime_error(why); }
+void valid_pixels(const Image& image) {
+    const uint64_t pixels=uint64_t(image.width)*image.height;
+    need(image.width&&image.height&&image.width<=32768&&image.height<=32768&&
+         pixels<=16u*1024*1024&&image.rgba.size()==pixels*4,"invalid image pixel buffer");
+}
 uint16_t word(const uint8_t* p) { return uint16_t(p[0]) | uint16_t(p[1]) << 8; }
 uint32_t dword(const uint8_t* p) {
     return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
@@ -131,6 +136,7 @@ Image read_image(const std::vector<uint8_t>& data, const std::vector<uint8_t>* p
 }
 
 void combine_base(Image& overlay, const Image& base) {
+    valid_pixels(overlay);valid_pixels(base);
     need(overlay.width == base.width && overlay.height == base.height, "base image dimensions mismatch");
     for (size_t i = 0; i < overlay.rgba.size(); i += 4)
         if (overlay.rgba[i] == 255 && overlay.rgba[i + 1] == 0 && overlay.rgba[i + 2] == 0)
@@ -138,9 +144,16 @@ void combine_base(Image& overlay, const Image& base) {
 }
 
 void apply_mask(Image& color, const Image& mask) {
+    valid_pixels(color);valid_pixels(mask);
     need(color.width == mask.width && color.height == mask.height, "image mask dimensions mismatch");
-    for (size_t i = 0; i < color.rgba.size(); i += 4)
-        color.rgba[i + 3] = uint8_t(255 - (unsigned(mask.rgba[i]) + mask.rgba[i + 1] + mask.rgba[i + 2]) / 3);
+    need(mask.indices.empty()||mask.indices.size()==color.rgba.size()/4,"invalid image mask indices");
+    for (size_t i = 0; i < color.rgba.size(); i += 4) {
+        // An associated RC8 is a byte transparency plane. Its display
+        // palette does not alter the original row blender's mask values.
+        const unsigned value=mask.indices.empty()?
+            (unsigned(mask.rgba[i])+mask.rgba[i+1]+mask.rgba[i+2])/3:mask.indices[i/4];
+        color.rgba[i + 3] = uint8_t(255-value);
+    }
 }
 
 Image transparency_mask(const Image& color) {

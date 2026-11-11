@@ -34,6 +34,7 @@ def main():
         ("encrypted_images", ["scripts/analysis/test_encrypted_images.py", "--samples", str(samples)]),
         ("version_research", ["scripts/analysis/research_majiro_versions.py"]),
         ("native_core", ["scripts/build/build_player_core.py", *(["--android"] if args.android else [])]),
+        ("native_pixels", ["scripts/build/build_player_native.py"]),
         ("native_core_tests", ["scripts/analysis/test_player_core.py"]),
         ("native_image_tests", ["scripts/analysis/test_player_images.py"]),
         ("raw_patch_loader", ["scripts/analysis/test_raw_player_patch.py"]),

@@ -63,6 +63,21 @@ def run():
                 offsets=[operand.mem.disp for row in body if row.mnemonic in("movss","fld")
                     for operand in row.operands if operand.type==capstone.CS_OP_MEM and operand.mem.base
                     and operand.mem.base not in(capstone.x86.X86_REG_ESP,capstone.x86.X86_REG_EBP)]
+                if not offsets:
+                    # The x87 build forwards float storage bits using
+                    # mov/push to the same typed result helper as 1.0f.
+                    # Require that forwarding sequence, excluding list links.
+                    for index,row in enumerate(body[:-2]):
+                        if(row.mnemonic!="mov"or len(row.operands)!=2 or
+                           row.operands[0].type!=capstone.CS_OP_REG or
+                           row.operands[1].type!=capstone.CS_OP_MEM):
+                            continue
+                        source=row.operands[1].mem
+                        following,call=body[index+1:index+3]
+                        if(source.base and source.base not in(capstone.x86.X86_REG_ESP,capstone.x86.X86_REG_EBP)
+                           and following.mnemonic=="push"and following.operands[0].type==capstone.CS_OP_REG
+                           and following.operands[0].reg==row.operands[0].reg and call.mnemonic=="call"):
+                            offsets.append(source.disp)
                 if len(set(heads))!=1 or len(set(offsets))!=1:
                     raise ValueError("ambiguous original sprite scale fields: "+name)
                 fields.update(head=heads[0],value=offsets[0])

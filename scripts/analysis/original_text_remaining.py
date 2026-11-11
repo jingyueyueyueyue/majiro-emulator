@@ -23,6 +23,12 @@ class FontoutOracle(TextOracle):
         self.default_page = self.DATA + 0x4c000
         f = self.functions
         body = self.entry_body("$fontout_push")
+        if not any(row.mnemonic == "rep movsd" for row in body):
+            children = [f.body(row.operands[0].imm) for row in body
+                        if row.mnemonic == "call" and row.operands[0].type == capstone.CS_OP_IMM]
+            copies = [child for child in children if any(row.mnemonic == "rep movsd" for row in child)]
+            if len(copies) == 1:
+                body = copies[0]
         copies = [i for i, row in enumerate(body) if row.mnemonic == "rep movsd"]
         if len(copies) != 1:
             raise ValueError("original font-output template copy changed")
@@ -39,7 +45,7 @@ class FontoutOracle(TextOracle):
         for row in body[copy+1:]:
             for operand in row.operands:
                 if (operand.type == capstone.CS_OP_MEM and operand.mem.base
-                        and operand.mem.disp in (0x4c28, 0x5028)):
+                        and operand.mem.disp in (0x4428, 0x4c28, 0x5028)):
                     if self.context_offset not in (None, operand.mem.disp):
                         raise ValueError("font-output context layout is ambiguous")
                     self.context_offset = operand.mem.disp
@@ -50,7 +56,7 @@ class FontoutOracle(TextOracle):
             self.machine.hook_add(unicorn.UC_HOOK_CODE, self._allocate, begin=allocation, end=allocation)
         later_calls = [row.operands[0].imm for row in body[copy+1:]
                        if row.mnemonic == "call" and row.operands[0].type == capstone.CS_OP_IMM]
-        if len(later_calls) == 2:
+        if len(later_calls) in (1, 2):
             page_getter = later_calls[0]
             def page_hook(uc, at, size, unused):
                 self._return(0, self.default_page)
@@ -167,8 +173,10 @@ class FontoutOracle(TextOracle):
             self.write_u32(self.valid_pages_head, self.default_page)
             self.write_u32(self.default_page + 0x38, self.default_page + 0x100)
             self.write_u32(self.default_page + 0x138, 0)
-        self.heap = self.DATA + 0x70000
-        self.guest_allocations = {}
+        # Preserve CRT objects allocated during StringOracle startup.
+        # Reset only the temporary font-output nodes between cases.
+        self.heap = getattr(self,"fixture_heap_start",self.DATA + 0x70000)
+        self.guest_allocations = dict(getattr(self,"permanent_allocations",{}))
 
     def call_fontout(self, name, args=(), discard=False):
         values = []

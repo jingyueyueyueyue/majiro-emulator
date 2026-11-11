@@ -473,6 +473,7 @@ public final class MainActivity extends Activity {
             return;
         }
         try {
+            entry=this.library.current(entry.id);
             Iterator<UriPermission> it = getContentResolver().getPersistedUriPermissions().iterator();
             while (true) {
                 if (!it.hasNext()) {

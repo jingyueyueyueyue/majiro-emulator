@@ -26,7 +26,11 @@ def run():
         "limits":["menu contents and actual input queues are separately verified"]}
     for sample in samples:
         oracle=ModeOracle(sample,by_name[sample["sample"]]["entries"])
-        behavior=profiles["executables"][sample["exe_sha256"]]["ultra_disable_returns_previous"]
+        if "$ultra_fast_enable" not in oracle.entries:
+            report["samples"].append({"sample":sample["sample"],"exe_sha256":sample["exe_sha256"],
+                                      "calls":[],"absent_public_api":"ultra-fast family"})
+            continue
+        behavior=oracle.disable_returns_previous()
         calls=[]
         for name in("$ultra_fast_enable","$ultra_fast_disable","$set_ultra_fast_mode"):
             count=failed=0

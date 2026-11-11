@@ -25,6 +25,7 @@ public final class GameBridge {
  static final HashMap<String,Boolean> audioCompletion=new HashMap<>();
  static final HashMap<String,String> audioSourcePaths=new HashMap<>();
  static final HashMap<String,Integer> levels=new HashMap<>();
+ static final HashMap<String,Object> audioFades=new HashMap<>();
  static final AudioLifecycle<MediaPlayer> audioLifecycle=new AudioLifecycle<>(players,new AudioLifecycle.Transport<MediaPlayer>(){
   public boolean playing(MediaPlayer p){return p.isPlaying();}
   public boolean pause(MediaPlayer p){p.playing=false;return true;}
@@ -81,7 +82,8 @@ def main():
     source=ROOT/"player/android/src/org/majiro/player/GameBridge.java";text=source.read_text(encoding="utf8")
     parts=[method(text,signature)for signature in(
         "public static synchronized boolean audio(","private static void applyVolume(",
-        "private static void observeAudio(","private static void promoteAudio(","private static MediaPlayer currentAudio(")]
+        "private static void startAudioFade(","private static void observeAudio(",
+        "private static void promoteAudio(","private static MediaPlayer currentAudio(")]
     folder=archive_dir("audio_preparation_cleanup");src=folder/"GameBridge.java"
     src.write_text(MOCK.replace("// METHODS","\n".join(parts)),encoding="utf8")
     clock=folder/"SystemClock.java";clock.write_text("package android.os;public final class SystemClock{public static long uptimeMillis(){return System.nanoTime()/1000000;}public static void sleep(long n){}}",encoding="utf8")

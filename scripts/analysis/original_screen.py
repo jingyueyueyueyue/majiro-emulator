@@ -78,6 +78,21 @@ class ScreenOracle(CallOracle):
                             centers={row.operands[1].mem.disp for row in body if row.mnemonic=="sub"
                                 and len(row.operands)==2 and absolute(row.operands[1])
                                 and row.operands[1].mem.disp!=slot}
+                            # Some x87 builds load home/client-origin globals
+                            # into registers before subtracting them.
+                            origins={}
+                            for row in body:
+                                if row.mnemonic=="sub"and len(row.operands)==2:
+                                    source=row.operands[1]
+                                    if source.type==capstone.CS_OP_REG and source.reg in origins:
+                                        origin=origins[source.reg]
+                                        if origin!=slot:centers.add(origin)
+                                if row.operands and row.operands[0].type==capstone.CS_OP_REG:
+                                    destination=row.operands[0].reg
+                                    if row.mnemonic=="mov"and len(row.operands)==2 and absolute(row.operands[1]):
+                                        origins[destination]=row.operands[1].mem.disp
+                                    elif row.mnemonic not in("cmp","test","push"):
+                                        origins.pop(destination,None)
                             if len(centers)!=1:raise ValueError("original double screen converter changed")
                             center=centers.pop();offset=None
                             inputs=extra-{center}
@@ -86,9 +101,14 @@ class ScreenOracle(CallOracle):
                         stack_argument=any(operand.type==capstone.CS_OP_MEM
                             and operand.mem.base in(capstone.x86.X86_REG_ESP,capstone.x86.X86_REG_EBP)
                             and operand.mem.disp>0 for row in body for operand in row.operands)
+                        # A stack-argument converter may read an extra window
+                        # offset. That global is not its physical cursor input.
+                        if stack_argument:
+                            input_slot=None
                         possible.append({"address":address,"home":slot,"center":center,"identity":False,
                             "offset":offset,"scale":scale,"fixed":fixed,"fastcall":not stack_argument,
-                            "input_slot":input_slot,"name":name})
+                            "input_slot":input_slot,"name":name,
+                            "integer_conversion":"x87"if divisions[0].mnemonic=="fdiv"else"sse32"})
                     else:following.extend(row.operands[0].imm for row in body if row.mnemonic=="call"
                             and row.operands[0].type==capstone.CS_OP_IMM)
                 if possible:break
@@ -118,6 +138,12 @@ class ScreenOracle(CallOracle):
         # The setter writes X then Y in every recovered build; its first input
         # can also be recovered from the dispatch stack accessor below.
         self.axes=mappings
+        if any(axis.get("integer_conversion")=="x87"for axis in self.axes):
+            # Unicorn starts FPCW at zero (24-bit precision), unlike an
+            # initialized x87. Normalize the architectural reset state;
+            # otherwise Y's extra fisub rounds away small cursor offsets.
+            self.machine.reg_write(reg.UC_X86_REG_FPCW,0x37f)
+            self.initial=self.machine.context_save()
         # The virtual-cursor reset branch copies the latest physical sample
         # into the sampled logical cursor slots. Recover its two sources so
         # tests can supply physical events without pretending a converter
@@ -338,8 +364,11 @@ class ScreenOracle(CallOracle):
         modes={axis["fixed"]for axis in self.axes}
         if len(modes)!=1:raise ValueError("mixed original X/Y screen converter versions")
         fixed=modes.pop()
-        return{"coordinate_mode":"fixed1000"if fixed else"double",
-               "home_direction":-1 if fixed else 1,"home_modulo":False,"home_affects_input":True}
+        result={"coordinate_mode":"fixed1000"if fixed else"double",
+                "home_direction":-1 if fixed else 1,"home_modulo":False,"home_affects_input":True}
+        if not fixed and any(axis.get("integer_conversion")=="x87"for axis in self.axes):
+            result["integer_conversion"]="x87"
+        return result
 
     def paint_origin(self,width=800,height=600):
         for axis,size in zip(self.axes,(width,height)):
@@ -374,6 +403,20 @@ class ScreenOracle(CallOracle):
         uc.reg_write(reg.UC_X86_REG_EBP,self.STACK+0xc000)
         self.write_u32(self.STACK+0xc008,1)
         uc.reg_write(reg.UC_X86_REG_ESI,1)
+        pushes=[row for row in self.paint_rows if row.mnemonic=="push"]
+        if not self.axes[0]["fixed"]and not self.axes[0]["identity"]and len(pushes)==7:
+            # The older x87 tail starts before destination extents and
+            # source origins are pushed. Seed those live registers and
+            # only the six arguments already pushed by its caller.
+            if [row.op_str for row in pushes] != ["esi","esi","edx","eax","ecx","eax","edi"]:
+                raise ValueError("unrecognized seven-argument DIB tail")
+            for index,value in enumerate((width,height,descriptor,descriptor,0,0xcc0020)):
+                self.write_u32(stack+index*4,value)
+            uc.reg_write(reg.UC_X86_REG_EAX,width)
+            uc.reg_write(reg.UC_X86_REG_EDX,height)
+            uc.reg_write(reg.UC_X86_REG_EBX,self.read_u32(self.axes[1]["center"]))
+            uc.reg_write(reg.UC_X86_REG_ESI,0)
+            uc.reg_write(reg.UC_X86_REG_EDI,1)
         uc.reg_write(reg.UC_X86_REG_EFLAGS,2)
         uc.emu_start(self.paint_entry,0,count=100000)
         if self.paint_result is None:raise RuntimeError("original presentation path exceeded bound")

@@ -78,7 +78,7 @@ public final class TranslationService {
         File folder=new File(context.getFilesDir(),"translation-cache");if(!folder.isDirectory())folder.mkdirs();return folder;
     }
     private static String cacheKey(TranslationSettings settings,String game,String id) throws Exception {
-        return hash("zh-CN-dialogue-v2\n"+settings.url+"\n"+settings.model+"\n"+game+"\n"+id);
+        return hash("zh-CN-dialogue-v3-original\n"+settings.url+"\n"+settings.model+"\n"+game+"\n"+id);
     }
     private static String cached(Context context,String key) {
         synchronized(memory){String value=memory.get(key);if(value!=null)return value;}

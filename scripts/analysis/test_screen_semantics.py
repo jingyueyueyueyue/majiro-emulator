@@ -99,6 +99,7 @@ def run():
         for sample in samples:
             oracle = ScreenOracle(sample, dispatch[sample["sample"]])
             profile = oracle.profile()
+            profile["cursor_reset_sentinel"]=oracle.cursor_reset_sentinel
             lua, _, _, system = registered_providers(overrides={"screen_controls": profile})
             providers, screen = system["providers"], system["screen"]
             vm, empty = lua.table(), lua.table()
@@ -153,13 +154,15 @@ def run():
                     assert actual == expected, (sample["sample"], home, point, actual, expected)
                     system["input"]["sample"](lua.table_from({"x": point[0], "y": point[1]}))
                     oracle.sample_cursor(*point)
-                    assert oracle.cursor()==expected
+                    assert oracle.cursor()==expected, (sample["sample"], home, point, oracle.cursor(), expected)
                     assert oracle.cursor(discard=True)==[]
                     for axis, name in enumerate(("$curpos_x", "$curpos_y")):
                         assert providers[name](vm, empty) == expected[axis]
                         calls[name]["cases"]+=2
                     cursor_cases += 1
                 for point in ((2, 3), (-9, 11), (-10000, 0)):
+                    if not oracle.has_virtual_cursor:
+                        break
                     oracle.sample_cursor(7, 5)
                     system["input"]["sample"](lua.table_from({"x": 7, "y": 5}))
                     for discard in(False,True):

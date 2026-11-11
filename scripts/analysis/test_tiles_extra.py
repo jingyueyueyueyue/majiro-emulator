@@ -30,7 +30,7 @@ def run():
         define=lua.eval("function(providers)return function(name,fn)providers[name]=fn end end")(providers)
         def module(name):
             return lua.execute((ROOT/"player"/name).read_text(encoding="utf8"))
-        api=module("runtime/majiro_tiles_analysis.lua")["install"](
+        api=module("runtime/majiro_tiles_extra.lua")["install"](
             define,state,lua.table_from({"modules":module}))
         got=api["execute"](lua.table(),0x850eecf4,lua.table_from([0,requested]))
         memory=state["tiles"]["memory"]

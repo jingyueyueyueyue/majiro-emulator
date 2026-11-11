@@ -24,8 +24,8 @@ CASES = (
     ("existing_positive_fade", [255, 0, 0, 250, 0, -1]),
 )
 TIMES = (0, 1, 50, 125, 249, 250, 251, 1000)
-OLD = "if point.duration<0 then s.anti=from;complete=false;break end"
-FIXED = "if point.duration<0 then s.anti=point.value;break end"
+OLD = "if point.duration<0 then return from,false end"
+FIXED = "if point.duration<0 then return point.value,true end"
 MAGICAL_HASH = "139d1559bd83da7fa54cc8c4d30ccd45401bfba5e542c4762a5cf0e1e3b539a0"
 
 
@@ -130,7 +130,7 @@ def main():
         assert ruri == magical, (label, "original versions disagree", ruri, magical)
         original_rows.append({"case": label, "points": points, "samples": magical,
                               "exe_sha256": [ruri_hash, magical_hash]})
-        for relative in ("player/runtime/majiro_sprites.lua", "runtime/majiro_sprites.lua"):
+        for relative in ("player/runtime/majiro_sprites.lua",):
             path = ROOT / relative
             actual = runtime_values(path, points, candidate=args.candidate)
             for elapsed, expected, got in zip(TIMES, magical, actual):
@@ -140,7 +140,7 @@ def main():
             rows.append({"case": label, "runtime": relative, "status": "passed",
                          "samples": actual, "runtime_sha256": sha256(path)})
     negative_controls = []
-    for relative in ("player/runtime/majiro_sprites.lua", "runtime/majiro_sprites.lua"):
+    for relative in ("player/runtime/majiro_sprites.lua",):
         bad = runtime_values(ROOT / relative, CASES[0][1],
                              candidate=args.candidate, negative=True)
         good = runtime_values(ROOT / relative, CASES[0][1], candidate=args.candidate)
@@ -157,7 +157,7 @@ def main():
               "runtime_comparisons": len(rows) * len(TIMES),
               "original": original_rows, "runtime": rows,
               "negative_controls": negative_controls, "device_accessed": False,
-              "scope": "two actual original alpha initializers/updaters and both runtime copies; synthetic native pixels, no actual game session",
+              "scope": "two actual original alpha initializers/updaters and the independent player; synthetic native pixels, no actual game session",
               "evidence": str(folder.relative_to(ROOT))}
     write_json(folder / "report.json", report)
     write_json(ROOT / ("reports/sprite_alpha_terminal_candidate.json" if args.candidate

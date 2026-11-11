@@ -84,7 +84,9 @@ public class Activity{
 "org/majiro/player/GameBridge.java": """package org.majiro.player;
 public class GameBridge{
  public static int opens,pauses,resumes,closes,cancelledMedia,menus,keys,commands,lastKey,lastCommand;
- public static void open(android.app.Activity a,String u,String r){opens++;}
+ public static RuntimeException openFailure;public static Exception launchError;
+ public static void open(android.app.Activity a,String u,String r){opens++;if(openFailure!=null)throw openFailure;}
+ public static void launchFailed(Exception error){launchError=error;}
  public static void pause(){pauses++;}public static void resume(){resumes++;}
  public static void close(){closes++;}public static void cancelPendingMedia(){cancelledMedia++;}
  public static void requestOriginalMenu(){menus++;}
@@ -191,6 +193,13 @@ public class ExitLifecycleTest{
   third.onBackPressed();third.sendGameKey(13);third.openWindowMenu(1);
   check(GameBridge.menus==4&&GameBridge.keys==1&&GameBridge.commands==1,"destroyed owner rejects input");
   check(first.superBack==0&&second.superBack==0,"SDL/platform immediate back never called");
+  GameBridge.openFailure=new IllegalStateException("text preflight rejected");
+  GameActivity rejected=new GameActivity();rejected.onCreate(new Bundle());
+  check(GameBridge.launchError==GameBridge.openFailure,"startup failure handed to native error owner");
+  check(rejected.finishes==0&&rejected.dispatcher.callback==null,"failed legacy launch reaches SDL setup");
+  rejected.finish();rejected.onDestroy();
+  check(GameBridge.closes==4&&android.os.Process.killed==3,"failed launch still closes its bridge on exit");
+  GameBridge.openFailure=null;
   System.out.println("GameActivity lifecycle checks: "+checks);
  }
 }""",

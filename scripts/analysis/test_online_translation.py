@@ -78,7 +78,7 @@ def main():
     check("first consumed sentence queues twenty sequential originals without loading, evaluating or mutating VM",
           len(first["lines"]) == 20 and codec["encode"](script["code"]) == before and vm["current_offset"] == 0)
     check("cache ID includes original MJO SHA, source offset and exact text SHA",
-          first["lines"][0]["id"] == "dialogue-v2:"+"a" * 64 + ":0:" + hashlib.sha256("原文00".encode()).hexdigest())
+          first["lines"][0]["id"] == "dialogue-v3-original:"+"a" * 64 + ":0:" + hashlib.sha256("原文00".encode()).hexdigest())
     state["time"] = 300; frame = vm["frame"]()
     for i in range(1, 10):
         frame["index"], vm["current_offset"] = i + 2, i * 4
@@ -141,7 +141,7 @@ def main():
     state["config"]["mode"] = "online"; state["time"] = 2000
     phrase = "本名＠音声ID「原文です。」"
     translation = 'モデル別名「这是汉语译文。」'
-    text_id = "dialogue-v2:"+"e" * 64 + ":0:" + hashlib.sha256(phrase.encode()).hexdigest()
+    text_id = "dialogue-v3-original:"+"e" * 64 + ":0:" + hashlib.sha256(phrase.encode()).hexdigest()
     state["result"][text_id] = translation
     fixture = lua.eval("""function(text,adapter,encode,phrase)
       local state={console={visible=true,text='',name='',x=0,y=0,configuration={1,0,0,400,200},
@@ -206,7 +206,7 @@ def main():
     check("cold-cache production proc waits without rastering source text or emitting CONSOLE_WROTE",
           pending_vm["waiting"]["kind"]=="time"and len(pending_graphics)==0 and len(pending_events)==0)
     state["time"]=5000
-    delayed_id="dialogue-v2:"+"f"*64+":0:"+hashlib.sha256("原文です。".encode()).hexdigest()
+    delayed_id="dialogue-v3-original:"+"f"*64+":0:"+hashlib.sha256("原文です。".encode()).hexdigest()
     state["result"][delayed_id]="译文已返回。";resume()
     check("asynchronous completion resumes the same proc with Chinese and exactly one source text event",
           len(pending_graphics)==1 and"译文已返回。"in pending_graphics[1]
@@ -262,9 +262,11 @@ def main():
           any(row["filled_20"] for row in real if row["game"] in ("happy_princess", "kizoku", "magical_kanon2", "idol_revolution", "oh_pants")))
     boot = (ROOT / "player/runtime/player_boot.lua").read_text(encoding="utf8")
     native = (ROOT / "player/android/game_host.cpp").read_text(encoding="utf8")
-    check("default original and local overlays are gated before configuration/resource loading",
-          "mode=='local'and patch_config.raw_metadata~=''and file_module(patch_config.raw_metadata)" in boot and
-          "mode=='local'and text_adapter.path" in boot)
+    check("complete text layer is preflighted before configuration and VM loading",
+          "module('runtime/majiro_text_resources.lua').new(mode,patch_config,HOST,module)" in boot and
+          "local raw_patch,text_patch=resources.raw,resources.text" in boot and
+          boot.index("resources.preflight()") <
+          boot.index("module('runtime/player_configuration.lua').make()"))
     check("no independent translation overlay or texture remains", "translation_overlay" not in native
           and "translation_texture" not in native and "HOST(translation);HOST(text_mode);" in native)
     report = {"schema": 1, "timestamp": timestamp(), "status": "passed", "checks": checks,

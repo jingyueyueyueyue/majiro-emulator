@@ -154,6 +154,10 @@ class StringOracle(OpcodeOracle):
         for address in self.errno_boundaries:
             self.machine.hook_add(unicorn.UC_HOOK_CODE, self._errno, begin=address, end=address)
         self._initialize_modern_crt(sample)
+        # CRT locale/character tables allocated during initialization outlive
+        # each opcode fixture. Reusing their heap space corrupts later cases.
+        self.fixture_heap_start = self.heap
+        self.permanent_allocations = dict(self.guest_allocations)
 
     def _initialize_modern_crt(self,sample):
         # This VC2012 layout was recovered from original _initptd,
@@ -228,8 +232,8 @@ class StringOracle(OpcodeOracle):
 
     def execute(self, *args, **kwargs):
         if not kwargs.pop("preserve_heap", False):
-            self.heap = self.DATA + 0x70000
-            self.guest_allocations = {}
+            self.heap = self.fixture_heap_start
+            self.guest_allocations = dict(self.permanent_allocations)
         try:
             return super().execute(*args, **kwargs)
         except Exception as error:

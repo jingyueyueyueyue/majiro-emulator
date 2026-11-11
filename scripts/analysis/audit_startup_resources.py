@@ -16,6 +16,7 @@ import struct
 import sys
 import time
 import uuid
+from functools import lru_cache
 
 import soundfile
 from PIL import Image
@@ -28,6 +29,16 @@ from majiro_patch import Patch
 from majiro_image import Decoder,image_key
 from port_common import ROOT,archive_dir,read_json,sha256,timestamp,write_json
 from lua_bridge import create_lua,table_value
+
+
+@lru_cache(maxsize=1)
+def production_text_plans():
+    """Compile the real Java manifest/mode/isolation policy once for this run."""
+    from run_text_resource_candidate import java_build
+    samples=read_json(ROOT/"config/player_samples.json")["games"]+read_json(ROOT/"config/player_new_samples.json")["games"]
+    folder=archive_dir("startup_text_policy")
+    plans,_=java_build(ROOT,folder,read_json(ROOT/"reports/android_toolchain.json"),samples)
+    return {str(Path(row["root"]).resolve()):row for row in plans["games"]}
 
 
 def key(value):
@@ -58,14 +69,24 @@ class Resource:
 
 class Startup:
     def __init__(self,game,files,mode,maximum=1500000,seconds=25):
-        self.game,self.files,self.mode=game,files,mode
+        self.game,self.files,self.requested_mode=game,files,mode
         self.maximum,self.seconds=maximum,seconds
         self.lua=create_lua();self.clock=0;self.system=None;self.vm=None
         self.base={};self.resources={};self.loose={};self.archive_rows=[]
-        declaration=json.loads(files["patches/manifest.json"].read_text(encoding="utf8"))if"patches/manifest.json"in files else{}
-        self.manifest=declaration if mode=="local"else{
-            "image_archives":declaration.get("image_archives",[])}
-        self.image_only_archives=set()
+        policy=production_text_plans()[str(Path(game["directory"]).resolve())]
+        self.local_unavailable=mode=="local"and policy["auto"]!="local"
+        # The legacy 3-mode matrix also exercises auto fallback for games without
+        # a local layer; explicitly record that this is not a successful forced
+        # local launch. Java independently rejects that forced-local request.
+        self.mode="original"if self.local_unavailable else mode
+        selected=next(row for row in policy["modes"]if row["mode"]==self.mode)
+        self.manifest=dict(selected["configuration"])
+        self.manifest["script_layers"]=selected["layers"]
+        self.manifest["archives"]=[row["path"]for row in selected["archives"]if row["path"].startswith("patches/")]
+        self.selected_archives=selected["archives"]
+        self.archive_scopes={key(row["path"]):row["scope"]for row in selected["archives"]}
+        self.duplicate_archives=set(map(key,policy["duplicates"]))
+        self.image_only_archives={name for name,scope in self.archive_scopes.items()if scope=="images"}
         self.patch=Patch()if self.manifest.get("raw_metadata")else None
         self.counts=Counter();self.resource_reads=[];self.host_events=[];self.derived=set();self.writes={}
         self.audio_cache={};self.image_cache={};self.durations={};self.dialogs=[]
@@ -74,15 +95,12 @@ class Startup:
         self.decoded_images={}
         self.translation_cache={}
         self.translation_submits=0
+        self.text_snapshot={};self.text_sealed=False;self.text_identity=None
+        self.vm_encoding=self.manifest.get("vm_encoding","cp932")
         self._index()
 
     def _index(self):
-        archives=list(self.manifest.get("archives",[]))
-        for name in self.manifest.get("image_archives",[]):
-            if name not in archives:
-                archives.append(name);self.image_only_archives.add(key(name))
-        archives+=sorted((name for name in self.files if "/"not in name and name.lower().endswith(".arc")
-                          and name.lower()!="savedata.arc"),reverse=True)
+        archives=[row["path"]for row in self.selected_archives]
         seen=set()
         for name in archives:
             if key(name)in seen:continue
@@ -94,11 +112,12 @@ class Startup:
         recognized={".mjo",".cfg",".env",".png",".rct",".rc8",".wav",".ogg",".wma",".dat",".txt"}
         for name,path in self.files.items():
             if "/"not in name and path.suffix.lower()in recognized:
-                self.loose[key(name)]=Resource(path=path)
+                item=Resource(path=path);item.scope="original";item.source_path="loose/"+key(name)
+                self.loose[key(name)]=item
         self.resources.update(self.loose)
         self._overlays()
         for name,path in self.files.items():
-            if path.suffix.lower()==".exe"and("/"not in name or name.startswith("bin/")):
+            if path.suffix.lower()==".exe"and("/"not in key(name)or(key(name).startswith("bin/")and key(name).count("/")==1)):
                 if path.stat().st_size<=128*1024*1024:self.profile_hashes.append(sha256(path))
 
     def _overlays(self):
@@ -108,8 +127,11 @@ class Startup:
                 for name,path in self.files.items():
                     if name.startswith(prefix):
                         basename=name[len(prefix):]
-                        if "/"not in basename and(layer["kind"]=="pinned_raw_patch"or basename.lower().endswith(".mjo")):
+                        if "/"not in basename and(layer["kind"]=="pinned_raw_patch"or basename.lower().endswith(".mjo")or
+                                                  layer["kind"]=="encoded_text"and Path(basename).suffix.lower()in(".cfg",".env",".txt")):
                             item=Resource(path=path);item.pinned=layer["kind"]=="pinned_raw_patch"
+                            item.scope=layer["encoding"]if layer["kind"]=="encoded_text"else layer["kind"]
+                            item.source_path=prefix+key(basename)
                             self.resources[key(basename)]=item
 
     def _refresh(self):
@@ -117,7 +139,9 @@ class Startup:
         for name,archive in self.active_archives:
             for member in archive.members:
                 if key(name)in self.image_only_archives and member.extension not in(".png",".bmp",".rct",".rc8"):continue
-                self.base.setdefault(key(member.name),Resource(member=member))
+                item=Resource(member=member);item.scope=self.archive_scopes.get(key(name),"original")
+                item.source_path=name+"/"+key(member.name)
+                self.base.setdefault(key(member.name),item)
         self.resources=dict(self.base)
 
     def archive(self,action,name):
@@ -125,6 +149,9 @@ class Startup:
         if action=="release":
             self.active_archives=[row for row in self.active_archives if key(row[0])!=key(name)]
         elif action=="register":
+            if key(name)in self.duplicate_archives:return 0
+            if key(name).startswith("patches/")and key(name)not in self.archive_scopes:
+                raise ValueError("dynamic archive outside active text mode")
             existing=next((row for row in self.archive_rows if key(row[0])==key(name)),None)
             if not existing:
                 source=next((path for filename,path in self.files.items()if key(filename)==key(name)),None)
@@ -151,26 +178,18 @@ class Startup:
         return actual.read_text(encoding="utf8")
 
     def engine_requirements(self):
-        features=set()
-        for name,path in self.files.items():
-            if path.suffix.lower()!=".exe"or("/"in name and not name.startswith("bin/")):continue
-            raw=path.read_bytes()
-            if b"MajiroObj"not in raw:continue
-            for version in range(102,106):
-                if("MajiroSavV1."+str(version)).encode("ascii")in raw:features.add("save:"+str(version))
-            for api in(0x2bd1709d,0x7e0b8320,0x87a631a6):
-                value=struct.pack("<I",api)
-                if b"\x3d"+value in raw or any(b"\x81"+bytes([reg])+value in raw for reg in range(0xf8,0x100)):
-                    features.add("api:"+format(api,"x"))
+        from production_engine_features import features
+        detected=features(path for name,path in self.files.items()
+                          if path.suffix.lower()==".exe"and("/"not in key(name)or(key(name).startswith("bin/")and key(name).count("/")==1)))
         return self.lua.table_from({"family":"Majiro",
             "archive_version":max(arc.version for name,arc in self.archive_rows if key(name)not in self.image_only_archives),
             "script_signature":self.resource("start.mjo").read()[:16].rstrip(b"\0").decode("ascii"),
-            "features":sorted(features)},recursive=True)
+            "features":detected},recursive=True)
 
     def game_text(self,name):
         name=key(name)
         path=next((path for candidate,path in self.files.items()if key(candidate)==name),None)
-        return path.read_text(encoding="utf8")if path else None
+        return path.read_bytes()if path else None
 
     def resource(self,name):
         try:return self.resources[key(name)]
@@ -179,6 +198,14 @@ class Startup:
     def raw(self,name):
         item=self.resource(name)
         raw=item.read()
+        if item.extension in(".mjo",".cfg",".env",".txt"):
+            sha=hashlib.sha256(raw).hexdigest()
+            stamp=item.scope+"\n"+item.source_path+"\n"+sha
+            normalized=key(name)
+            if self.text_sealed or normalized in self.text_snapshot:
+                if self.text_snapshot.get(normalized)!=stamp:raise ValueError("text resource changed after preflight: "+name)
+            self.lua.globals()["PLAYER_VERIFY_TEXT_RESOURCE"](normalized,sha,item.scope,item.source_path)
+            self.text_snapshot[normalized]=stamp
         if getattr(item,"pinned",False):
             expected=next((m.sha256 for m in self.patch.members if key(m.name)==key(name)),None)
             if hashlib.sha256(raw).hexdigest()!=expected:raise ValueError("raw patch source hash changed: "+name)
@@ -186,18 +213,42 @@ class Startup:
 
     def resource_text(self,name):
         item,raw=self.raw(name)
-        return self.patch.decode(raw)if getattr(item,"pinned",False)else raw.decode("cp932")
+        codec={"original":"cp932","source_mjo":"cp932","cp932":"cp932","cp936":"gbk","utf-8":"utf8"}.get(item.scope)
+        return self.patch.decode(raw)if getattr(item,"pinned",False)else raw.decode(codec or "untyped-local")
+
+    def text_resource_names(self):
+        return self.lua.table_from(sorted(name for name,item in self.resources.items()
+                                         if item.extension in(".mjo",".cfg",".env",".txt")))
+
+    def patch_resource_names(self):
+        rows=[]
+        for layer in self.manifest.get("script_layers",[]):
+            prefix=layer["directory"]+"/"
+            for name in self.files:
+                if name.startswith(prefix)and"/"not in name[len(prefix):]and Path(name).suffix.lower()in(".mjo",".cfg",".env",".txt"):
+                    rows.append(layer["directory"]+"\t"+key(name[len(prefix):]))
+        return self.lua.table_from(rows)
+
+    def seal_text_resources(self):
+        assert self.text_snapshot and "start.mjo"in self.text_snapshot
+        self.text_sealed=True
+
+    def set_text_identity(self,identity,encoding):
+        assert self.text_sealed and re.fullmatch("[0-9a-f]{64}",identity)
+        assert self.text_identity is None or self.text_identity==identity
+        self.text_identity=identity;self.vm_encoding=encoding
 
     def script(self,name):
         normalized=key(name)
-        if normalized in self.script_cache:return self.script_cache[normalized]
         item,raw=self.raw(name)
         pinned=getattr(item,"pinned",False)
         sha=hashlib.sha256(raw).hexdigest()
-        parsed=Script(item.name,raw,string_decoder=self.patch.decode if pinned else lambda b:b.decode("cp932"),
+        codec={"original":"cp932","source_mjo":"cp932","cp932":"cp932","cp936":"gbk","utf-8":"utf8"}.get(item.scope)
+        parsed=Script(item.name,raw,string_decoder=self.patch.decode if pinned else lambda b:b.decode(codec or "untyped-local"),
                       address_repairs=self.patch.repairs(item.name,sha)if pinned else None)
         data=parsed.runtime_data()
         if pinned:data["patch_source"]=True
+        data.update(text_origin=item.scope,text_encoding="cp932-tunnel"if pinned else codec,resource_path=item.source_path)
         result=self.lua.table_from(data,recursive=True)
         self.script_cache[normalized]=result
         self.resource_reads.append({"kind":"script","name":item.name,"sha256":sha})
@@ -415,7 +466,10 @@ class Startup:
         raise RuntimeError("unexpected storage action: "+action)
 
     def identity(self):
-        return hashlib.sha256(("audit:"+self.game["id"]).encode()).hexdigest()
+        assert self.text_sealed
+        value="audit:"+self.game["id"]+"\ntext-resources-v2\n"+("local"if self.mode=="local"else"original")
+        value+="".join("\n"+name+"\n"+stamp for name,stamp in sorted(self.text_snapshot.items()))
+        return hashlib.sha256(value.encode()).hexdigest()
 
     def platform(self,action,args):
         self.counts["platform:"+action]+=1
@@ -461,6 +515,10 @@ class Startup:
             "text_mode":lambda:self.mode,"patch_configuration":lambda:json.dumps(dict(self.manifest,legacy=False,
                 raw_metadata=self.manifest.get("raw_metadata",""),text_adapter=self.manifest.get("text_adapter",{}))),
             "identity":self.identity,
+            "text_resource_names":self.text_resource_names,"patch_resource_names":self.patch_resource_names,
+            "pin_text_resource":lambda name:self.raw(name)and None,"seal_text_resources":self.seal_text_resources,
+            "set_text_identity":self.set_text_identity,
+            "encode_text":lambda text,encoding:text.encode({"cp936":"gbk"}.get(encoding,encoding)),
             "engine_requirements":self.engine_requirements,"member_names":self.member_names,
             "image_metadata":lambda name:self.lua.table_from(self.image(name)),
             "image_asset":lambda name,*args:self.lua.table_from(self.image(name)),
@@ -478,6 +536,18 @@ class Startup:
             "script_file_write":lambda name,text:self.writes.update({name:text}),
             "external_save":lambda *args:"CANCEL","set_clock":lambda value:setattr(self,"clock",value)}
         for name,value in callbacks.items():host[name]=value
+        # Lupa's UTF-8 Python string boundary cannot carry arbitrary MJO/bin
+        # bytes. Hash and decode binary strings through hex, preserving bytes.
+        host["storage"]=self.lua.eval("""function(hash,other)return function(request)
+          if request:sub(1,7)=='sha256\\n' then
+            return 'OK '..hash((request:sub(8):gsub('.',function(c)return string.format('%02x',c:byte())end)))
+          end
+          return other(request)
+        end end""")(lambda value:hashlib.sha256(bytes.fromhex(value)).hexdigest(),self.storage)
+        decode=self.lua.eval("""function(convert)return function(raw,encoding)
+          return convert((raw:gsub('.',function(c)return string.format('%02x',c:byte())end)),encoding or'cp932')
+        end end""")(lambda value,encoding:bytes.fromhex(value).decode({"cp936":"gbk"}.get(encoding,encoding)))
+        host["decode_bytes"]=decode;host["decode_text"]=decode
         self.lua.globals()["HOST"]=host
         boot=(ROOT/"player/runtime/player_boot.lua").read_text(encoding="utf8")
         # Observe lexical state without changing any executed instruction or PC.
@@ -510,7 +580,10 @@ class Startup:
             stem=requested.rsplit(".",1)[0]if"."in requested else requested
             aliases=[{"requested":requested,"same_stem_member":self.resources[key(stem+ext)].name}
                      for ext in(".rct",".rc8",".png")if key(stem+ext)in self.resources]
-        return{"game":self.game["id"],"mode":self.mode,"stop":stop,"error":error,"problem":problem,
+        return{"game":self.game["id"],"mode":self.requested_mode,"effective_mode":self.mode,
+            "local_unavailable_auto_fallback":self.local_unavailable,"text_preflight_sealed":self.text_sealed,
+            "verified_text_resources":len(self.text_snapshot),"text_identity":self.text_identity,
+            "stop":stop,"error":error,"problem":problem,
             "steps":int(self.vm["steps"])if self.vm else 0,"simulated_ms":self.clock,"seconds":round(time.monotonic()-began,3),
             "loaded_scripts":sorted(self.vm["scripts"].keys())if self.vm else sorted(self.script_cache),
             "ui_area_count":len(state["ui_areas"])if state and state["ui_areas"]else 0,

@@ -42,6 +42,12 @@ def run():
                   "overlong labels and table overflow rejected instead of reproducing memory corruption"],
         "complete_engine_semantics":False}
     for sample in samples:
+        available=by_name[sample["sample"]]["entries"]
+        if not any(row["name"]=="$get_voice_setup" for row in available):
+            report["samples"].append({"sample":sample["sample"],"exe_sha256":sample["exe_sha256"],
+                "calls":[],"absent_public_api":"$get_voice_setup",
+                "scope":"original dispatch lacks per-character voice settings family"})
+            continue
         oracle=VoiceSettingsOracle(sample,by_name[sample["sample"]]["entries"])
         lua,_,_,system=registered_providers()
         module=lua.execute((ROOT/"player/runtime/majiro_vm.lua").read_text(encoding="utf-8"))

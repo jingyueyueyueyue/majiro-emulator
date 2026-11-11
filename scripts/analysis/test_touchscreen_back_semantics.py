@@ -94,6 +94,12 @@ public class TouchscreenBackTest {
   GameActivity legacy=new GameActivity();legacy.onCreate(new Bundle());legacy.onBackPressed();
   check(GameBridge.backs==6&&legacy.finishes==0,"legacy back remains in game");
   check(legacy.superBack==0,"SDL immediate exit bypassed");
+  GameBridge.openFailure=new IllegalStateException("text preflight rejected");
+  GameActivity rejectedLaunch=new GameActivity();rejectedLaunch.onCreate(new Bundle());
+  check(GameBridge.launchError==GameBridge.openFailure&&rejectedLaunch.finishes==0,
+        "launch error reaches native owner without crashing Activity creation");
+  rejectedLaunch.onBackPressed();check(GameBridge.backs==7,"legacy back wiring survives launch-error setup");
+  rejectedLaunch.onDestroy();GameBridge.openFailure=null;
   System.out.println("Touchscreen back checks: "+checks);
  }
 }"""
@@ -113,7 +119,9 @@ def run(root: Path, evidence: Path) -> dict:
     stubs.pop("org/majiro/player/ExitLifecycleTest.java")
     stubs["org/majiro/player/GameBridge.java"] = """package org.majiro.player;public class GameBridge{
  public static int opens,pauses,resumes,closes,cancelledMedia,backs;
- public static void open(android.app.Activity a,String u,String r){opens++;GameTouchKeys.reset();}
+ public static RuntimeException openFailure;public static Exception launchError;
+ public static void open(android.app.Activity a,String u,String r){opens++;GameTouchKeys.reset();if(openFailure!=null)throw openFailure;}
+ public static void launchFailed(Exception error){launchError=error;}
  public static void pause(){pauses++;}public static void resume(){resumes++;}public static void close(){closes++;}
  public static void cancelPendingMedia(){cancelledMedia++;}
  public static void requestOriginalMenu(){backs++;}

@@ -34,7 +34,7 @@ def run():
         assert got==expected,(dims,indices,got,expected)
         rows.append({"dimensions":dims,"indices":indices,"flat":got})
     lua=create_lua()
-    module=lua.execute((ROOT/"runtime/majiro_vm.lua").read_text(encoding="utf8"))
+    module=lua.execute((ROOT/"player/runtime/majiro_vm.lua").read_text(encoding="utf8"))
     lua.globals()["VM"]=module
     assert lua.execute("""
       local v=VM.new{loader=function()end,opcodes={},syscall=function()end}

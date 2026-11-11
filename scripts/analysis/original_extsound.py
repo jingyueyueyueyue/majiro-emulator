@@ -121,6 +121,23 @@ class ExtSoundOracle(AudioOracle):
                            and operand.mem.disp not in self.iat
                            and operand.mem.disp not in(self.frame_global,self.context_global)):
                             slot=operand.mem.disp;break
+            if slot in gains or slot is None:
+                # Older stop wrappers call the transport helper before
+                # resetting their one-shot gain in the outer wrapper.
+                for call in f.calls(stop):
+                    child=f.body(call.operands[0].imm)
+                    reads=[]
+                    for item in child:
+                        if item.mnemonic=="call":break
+                        if item.mnemonic=="mov"and len(item.operands)==2:
+                            operand=item.operands[1]
+                            if(operand.type==capstone.CS_OP_MEM and not operand.mem.base
+                               and not operand.mem.index and operand.mem.disp not in self.iat
+                               and operand.mem.disp not in(self.frame_global,self.context_global)):
+                                reads.append(operand.mem.disp)
+                    reads=list(dict.fromkeys(reads))
+                    if len(reads)==1 and reads[0]not in gains:
+                        slot=reads[0];break
             if slot is None or len(gains)!=1:raise ValueError("original SE handle/gain fields changed")
             root=f.syscall_helper(self.entries[name])
             guard=next(row.operands[0].imm for row in f.body(root)if row.mnemonic=="call"
@@ -238,5 +255,14 @@ class ExtSoundOracle(AudioOracle):
         result=self.execute("syscallp"if discard else"syscall",[(2,second),(2,first)],
             struct.pack("<IH",int(entry["hash"],16),2),setup=setup,budget=300000)
         return{"result":result,"plays":list(self.plays),"lookups":list(self.lookups),
-               "old_active":bool(self.read_u32(self.stream+0x650)),
+               "old_active":bool(self.read_u32(self.stream+self.active_offset)),
                "handle":self.read_u32(info["slot"]),"next_gain":self.read_u32(info["gain_slot"])}
+
+    def audio_profile(self):
+        observed=self.call_extsound("sound","both","loop",
+            {"both.wav","both.ogg","loop.wav","loop.ogg"},previous=False)
+        assert len(observed["plays"])==1,observed
+        first=observed["plays"][0]["first"].lower()
+        assert first in("both.wav","both.ogg"),observed
+        extensions=[".ogg",".wav"]if first.endswith(".ogg")else[".wav",".ogg"]
+        return{"extensions":extensions}

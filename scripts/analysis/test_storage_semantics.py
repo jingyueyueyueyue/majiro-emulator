@@ -12,6 +12,7 @@ import sys
 
 from lua_bridge import create_lua
 from original_opcode import OpcodeOracle, f32_bits, native_number
+from original_fixture_scope import profile_for, finish_scope
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "convert"))
 from port_common import ROOT, archive_dir, timestamp, write_json
@@ -76,7 +77,10 @@ def run():
               "host_calls_replaced": False, "complete_engine_semantics": False}
     for sample in dispatch["samples"]:
         oracle = OpcodeOracle(sample)
-        profile = profiles["executables"][sample["exe_sha256"]]["numeric"]
+        profile = profile_for(profiles, sample, report)
+        if profile is None:
+            continue
+        profile = profile["numeric"]
         counts, failures, matched_faults = Counter(), Counter(), Counter()
         for name, row in sorted(oracle.rows.items()):
             if not name.startswith(("st.", "stp.", "stelem.", "stelemp.")):
@@ -150,9 +154,11 @@ def run():
     report["mismatches"] = sum(sum(row["failures"].values()) for row in report["samples"])
     report["test_sources"] = {
         name: hashlib.sha256((ROOT / "scripts/analysis" / name).read_bytes()).hexdigest()
-        for name in ("original_opcode.py", "test_storage_semantics.py")
+        for name in ("original_opcode.py", "original_fixture_scope.py",
+                     "original_comparison_profiles.py", "test_storage_semantics.py")
     }
     report["status"] = "passed" if not report["mismatches"] else "failed"
+    finish_scope(report)
     folder = archive_dir("storage_semantics")
     write_json(folder / (folder.name[:8] + "_storage_semantics.json"), report)
     write_json(ROOT / "reports/storage_semantics_tests.json", report)

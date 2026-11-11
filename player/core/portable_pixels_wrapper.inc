@@ -16,11 +16,13 @@
 namespace majiro::pixels {
 static Host host;
 /*PAGE_ALGORITHMS*/
-static std::map<int,Page> checkpoint_pages;
-static bool checkpoint_active=false;
 
 static Page load(const std::string& path, bool alpha, bool indexed = false) {
     auto image = host.load(path, alpha);
+    const uint64_t pixels=uint64_t(image.width)*image.height;
+    require(image.width&&image.height&&image.width<=32768&&image.height<=32768&&
+            pixels<=PAGE_LIMIT/4&&image.rgba.size()==pixels*4,"invalid host image pixels");
+    require(!indexed||image.indices.size()==pixels,"invalid host image indices");
     Page page = allocate(int(image.width), int(image.height), alpha);
     page.rgba = std::move(image.rgba);
     if (indexed) {
@@ -37,25 +39,29 @@ static Page load(const std::string& path, bool alpha, bool indexed = false) {
     return page;
 }
 static void png(const Page& page, const std::string& path) {
-    if (path == "screen") host.present(page.w, page.h, page.rgba);
-    else host.png(path, page.w, page.h, page.rgba);
+    // Native PNG export materializes the indexed display palette and the
+    // independently attached reverse-alpha page. Raw storage is not RGBA
+    // whenever either of those page representations is present.
+    std::vector<uint8_t> rgba;
+    const auto* output=&page.rgba;
+    if(page.depth==8||page.antidata){
+        rgba=page.rgba;
+        for(size_t at=0;at<rgba.size();at+=4){
+            if(page.depth==8){
+                const auto color=page.palette[page.rgba[at]];
+                rgba[at]=uint8_t(color>>16);rgba[at+1]=uint8_t(color>>8);
+                rgba[at+2]=uint8_t(color);rgba[at+3]=255;
+            }else rgba[at+3]=alpha_at(page,at/4);
+        }
+        output=&rgba;
+    }
+    if (path == "screen") host.present(page.w, page.h, *output);
+    else host.png(path, page.w, page.h, *output);
 }
 static void png_fast(const Page& page, const std::string& path) { png(page, path); }
 static std::string run(const std::string& request) {
     std::istringstream in(request);
     std::string op; in >> op;
-    if(op=="checkpoint_begin"){
-        require(!checkpoint_active,"nested graphics checkpoint transaction");
-        checkpoint_pages=pages;checkpoint_active=true;return "OK";
-    }
-    if(op=="checkpoint_rollback"){
-        require(checkpoint_active,"graphics checkpoint transaction missing");
-        pages=std::move(checkpoint_pages);checkpoint_pages.clear();checkpoint_active=false;return "OK";
-    }
-    if(op=="checkpoint_commit"){
-        require(checkpoint_active,"graphics checkpoint transaction missing");
-        checkpoint_pages.clear();checkpoint_active=false;return "OK";
-    }
     if (op == "batch") {
         size_t offset = request.find('\n');
         require(offset != std::string::npos, "batch missing"); ++offset;
@@ -85,7 +91,8 @@ static std::string run(const std::string& request) {
         return host.platform(request);
     /*BASIC_OPERATIONS*/
     if (op == "glyphs" || op == "text") {
-        int id, x, y, height, half, boxw = 0, boxh = 0, align = -1;
+        int id, height, half, boxw = 0, boxh = 0, align = -1;
+        int64_t x,y;
         uint32_t color, shadow = 0;
         if (op == "glyphs")
             require(bool(in >> id >> x >> y >> height >> half >> color >> shadow), "glyph arguments");
@@ -116,7 +123,7 @@ static std::string run(const std::string& request) {
         }
         if (op == "text" && boxh > 0) y += (boxh - raster.height) / 2;
         auto paint = [&](int xx, int yy, unsigned alpha, uint32_t rgb) {
-            int px = x + xx, py = y + yy;
+            int64_t px = x + xx, py = y + yy;
             if (!alpha || px < 0 || py < 0 || px >= page.w || py >= page.h) return;
             size_t at = (size_t(py) * page.w + px) * 4;
             if (page.antidata) {

@@ -94,6 +94,12 @@ def main():
                          "old EXEs normalize nonzero replacement loop flags to -1; runtime stores logical nonzero",
                          "pending native calls retain argument slots while portable VM owns a continuation"]}
     for sample in samples:
+        if not any(row["name"]=="$music_pause" for row in dispatch[sample["sample"]]["entries"]):
+            report["samples"].append({"sample":sample["sample"],"exe_sha256":sample["exe_sha256"],
+                "calls":[],"scope":"legacy transport; exercised by test_emulator_legacy_audio.py",
+                "absent_public_apis":[name for name in NAMES if not any(
+                    row["name"]==name for row in dispatch[sample["sample"]]["entries"])]})
+            continue
         oracle = AudioCompletionOracle(sample, dispatch[sample["sample"]]["entries"])
         cases = []
         for present in (False, True):
@@ -111,6 +117,8 @@ def main():
                         cases.append(("$extmusic_replace", arguments, fixture))
         counts, failures, argument_counts = Counter(), Counter(), {}
         for name, arguments, fixture in cases:
+            if name not in oracle.entries:
+                continue
             for discard in (False, True):
                 counts[name] += 1
                 argument_counts.setdefault(name, set()).add(len(arguments))
@@ -189,7 +197,7 @@ def main():
         calls = [{"name": name, "hash": oracle.entries[name]["hash"], "cases": counts[name],
                   "failures": failures[name], "status": "passed" if not failures[name] else "failed",
                   "argument_counts": sorted(argument_counts[name]), "discard_modes": [False, True]}
-                 for name in NAMES]
+                 for name in NAMES if name in oracle.entries]
         report["samples"].append({"sample": sample["sample"], "exe_sha256": sample["exe_sha256"],
                                   "calls": calls, "helpers": oracle.recovered,
                                   "stream_head": oracle.stream_head, "handle_slot": oracle.music_slot})

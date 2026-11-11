@@ -13,12 +13,11 @@ from port_common import ROOT,archive_dir,write_json,timestamp
 
 
 def main():
-    evidence=ROOT.parent/"archive/2026-11/20261110_sprite_priority"
-    dispatch=json.loads((evidence/"dispatch.json").read_text())
-    scan=json.loads((evidence/"scan.json").read_text())
-    executable=next(p for p in Path(scan["directory"]).joinpath("bin").glob("*.exe")
-                    if "uninst" not in p.name.lower())
-    sample={"path":str(executable),"exe_sha256":dispatch["exe_sha256"]}
+    sample=next(row for row in json.loads((ROOT/"reports/opcode_dispatch.json").read_text(encoding="utf8"))["samples"]
+                if row["sample"]=="SWITCH")
+    dispatch=next(row for row in json.loads((ROOT/"reports/syscall_dispatch.json").read_text(encoding="utf8"))["samples"]
+                  if row["exe_sha256"]==sample["exe_sha256"])
+    executable=Path(sample["path"])
     assert hashlib.sha256(executable.read_bytes()).hexdigest()==sample["exe_sha256"]
     native=FunctionFixture(sample)
     native.machine=native.uc

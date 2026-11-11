@@ -2,7 +2,7 @@
 from PIL import Image
 import numpy as np
 from native_pixels import Pixels
-from port_common import ROOT, archive_dir, write_json, sha256,native_pixels_library
+from port_common import ROOT, archive_dir, write_json, sha256,player_pixels_library as native_pixels_library
 
 
 def unclipped_reference(text,height,scale=3):

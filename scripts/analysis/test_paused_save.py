@@ -34,7 +34,8 @@ def run():
                            "paused":spec["paused_at"]is not None})
             return True
         def graphics(request):
-            if request!="reset_pages":raise ValueError("fixture has no graphics to replay: "+request)
+            if request not in ("reset_pages","checkpoint_begin","checkpoint_commit","checkpoint_rollback"):
+                raise ValueError("fixture has no graphics to replay: "+request)
             return"OK"
         options=lua.table_from({"names":module("resources/scripts/syscall_names.lua"),
             "config_files":{},"config_lines":{},"environment":{"MUSICVOL":"1000"},

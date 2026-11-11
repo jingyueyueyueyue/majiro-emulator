@@ -5,6 +5,7 @@ from collections import Counter
 import hashlib
 import json
 from pathlib import Path
+import argparse
 import sys
 
 from audit_player_semantics import registered_providers,source_identity
@@ -38,8 +39,12 @@ end
 
 
 def run():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--sample",action="append")
+    args=parser.parse_args()
     before=source_identity()
     samples=json.loads((ROOT/"reports/opcode_dispatch.json").read_text(encoding="utf8"))["samples"]
+    if args.sample:samples=[row for row in samples if row["sample"]in args.sample]
     entries={s["sample"]:s["entries"]for s in
         json.loads((ROOT/"reports/syscall_dispatch.json").read_text(encoding="utf8"))["samples"]}
     report={"schema":1,"timestamp":timestamp(),"source_identity":before,"samples":[],"failures":[],"local_checks":[],
@@ -56,6 +61,8 @@ def run():
         screen_profile=ScreenOracle.profile(oracle)
         counts,failed,arities=Counter(),Counter(),{}
         for hash_,args,fixture in cases(oracle):
+            if hash_ not in oracle.hash_entries:
+                continue
             for discard in(False,True):
                 counts[hash_]+=1;arities.setdefault(hash_,set()).add(len(args));reason=None
                 actual_calls=[]
@@ -76,7 +83,8 @@ def run():
                 p["caps_guard"]=fixture.get("caps_guard",-1)
                 settings["keyboard_disabled"]=bool(fixture.get("keyboard_disabled",0))
                 system["input"]["sample"](lua.table_from({"x":point[0],"y":point[1],
-                    "cursor_available":bool(fixture.get("enabled",1))and fixture.get("success",True)}))
+                    "cursor_available":(oracle.cursor_enabled_slot is None or bool(fixture.get("enabled",1)))
+                        and fixture.get("success",True)}))
                 home=fixture.get("home",(0,0))
                 system["providers"]["$grp_home"](vm,lua.table_from(home))
                 try:

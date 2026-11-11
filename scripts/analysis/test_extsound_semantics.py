@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+import argparse
 
 from audit_player_semantics import registered_providers,source_identity
 from original_extsound import ExtSoundOracle
@@ -15,9 +16,13 @@ from port_common import ROOT,archive_dir,timestamp,write_json
 
 
 def run():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--sample",action="append")
+    args=parser.parse_args()
     samples=json.loads((ROOT/"reports/opcode_dispatch.json").read_text(encoding="utf-8"))["samples"]
     dispatch=json.loads((ROOT/"reports/syscall_dispatch.json").read_text(encoding="utf-8"))["samples"]
     by_name={row["sample"]:row for row in dispatch};before=source_identity()
+    if args.sample:samples=[row for row in samples if row["sample"]in args.sample]
     files={"intro.ogg","loop.ogg","both.wav","both.ogg","\u97f3.ogg"}
     requests=[("intro","loop"),("intro",""),("both","loop"),("missing","loop"),("intro","missing"),
               ("","loop"),("sub\\Intro","LOOP"),("\u97f3","loop")]
@@ -33,9 +38,11 @@ def run():
         "complete_engine_semantics":False}
     for sample in samples:
         oracle=ExtSoundOracle(sample,by_name[sample["sample"]]["entries"])
+        audio_profile=oracle.audio_profile()
         counts,failures=Counter(),Counter()
         for channel,info in oracle.channels.items():
             for first,second,disabled,ultra,master,gain in cases:
+                if ultra and oracle.ultra_slot is None:continue
                 for previous in(False,True):
                     for discard in(False,True):
                         counts[info["api"]]+=1;events=[];asset_reads=[];lua_ref={}
@@ -49,6 +56,7 @@ def run():
                             return True
                         lua,_,_,system=registered_providers(overrides={
                             "resource_names":{name:True for name in files},"media_asset":asset,
+                            "audio_controls":audio_profile,
                             "environment":{"SOUNDVOL":str(master)},"audio":audio,"audio_disabled":disabled})
                         lua_ref["lua"]=lua;media=system["state"]["media"]
                         media[channel+"_volume"]=gain
@@ -96,6 +104,7 @@ def run():
             "calls":calls,"vfs_predicate":oracle.exists_va,"splitpath_boundary":oracle.splitpath_va,
             "decoder_boundary":oracle.play_va,"decoder_stack_arguments":oracle.play_cleanup//4,
             "master_slot":oracle.master_slot,"enabled_slot":oracle.enabled_slot})
+        report["samples"][-1]["audio_controls"]=audio_profile
         print(f"{sample['sample']}: {sum(counts.values())} extended sounds; "
               f"{sum(failures.values())} mismatches",flush=True)
     report["comparisons"]=sum(row["cases"]for sample in report["samples"]for row in sample["calls"])

@@ -104,6 +104,7 @@ function M.new(options)
     resume_action=options.resume_action,
     wall_deadline=options.wall_deadline,
     numeric_profile=numeric_profile,
+    array_3d_legacy_stride=options.array_3d_legacy_stride==true,
     case_string_relations=options.case_string_relations~=false,
     scripts={},functions={},libraries={},frames={},stack={},stack_types={},duplicate_functions={},load_order={},
     globals={[0]=options.persistent_globals or{},[1]={},[2]={}},hooks={},steps=0,status='ready',
@@ -266,12 +267,15 @@ end
 function VM:load(name)
   -- Original script loading uses _splitpath's filename and replaces its
   -- extension with .mjo. Source scripts can legitimately name a .mjs file.
-  name=name:gsub('\\','/'):match('([^/]*)$'):gsub('^[A-Za-z]:','')
+  name=name:match('^[^%z]*'):gsub('\\','/'):match('([^/]*)$'):gsub('^[A-Za-z]:','')
   name=name:gsub('%.[^.]*$','')..'.mjo'
   if self.scripts[name] then return self.scripts[name] end
   for loaded,script in pairs(self.scripts) do if loaded:lower()==name:lower() then return script end end
   local script=self.loader(name)
   if not script then self:fail('script not found: '..name) end
+  -- The host resolves CP932/fullwidth case aliases to the archive's name.
+  -- Reuse that script object before registering callbacks/functions again.
+  if self.scripts[script.name]then return self.scripts[script.name]end
   script.positions={}
   for index,row in ipairs(script.code) do script.positions[row[1]]=index end
   self.scripts[script.name]=script
@@ -529,7 +533,7 @@ function VM:export_state()
     thread_order=thread_order,next_thread=self.next_thread,schedule_cursor=cursor,
     globals=self.globals,libraries=self.libraries,status=self.status,steps=self.steps,
     entry_script=self.entry_script,exiting_context=self.exiting_context,reset_reason=self.reset_reason,
-    numeric_profile=self.numeric_profile}
+    numeric_profile=self.numeric_profile,array_3d_legacy_stride=self.array_3d_legacy_stride}
 end
 function VM:import_state(data)
   assert(data.schema==1 and data.threads[data.thread_id],'invalid VM checkpoint')
@@ -540,6 +544,8 @@ function VM:import_state(data)
   end
   assert(not data.numeric_profile or data.numeric_profile==self.numeric_profile,
     'checkpoint engine numeric profile changed')
+  assert(data.array_3d_legacy_stride==nil or
+    data.array_3d_legacy_stride==self.array_3d_legacy_stride,'checkpoint array indexing profile changed')
   self.scripts={};self.functions={};self.duplicate_functions={};self.load_order={}
   for _,record in ipairs(data.scripts)do
     local script=self:load(record.name)
@@ -611,7 +617,9 @@ function VM:slot(flags,hash,offset,element)
       -- Original 0x43A590 wraps every coordinate by its dimension, adding
       -- the dimension for negative remainders. -1 addresses the last item.
       index=index%array.dims[i]
-      flat=flat*array.dims[i]+index
+      if self.array_3d_legacy_stride and dimensions==3 then
+        flat=flat+index*(i==1 and array.dims[2]or i==2 and array.dims[3]or 1)
+      else flat=flat*array.dims[i]+index end
     end
     bank,key,vartype=array.values,flat,array.element_type
     if bank[key]==nil then bank[key]=default(vartype) end

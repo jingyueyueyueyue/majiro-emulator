@@ -49,8 +49,6 @@ def main():
         original_id=manifest.attrib["package"]
         application_id="org.majiro.player.recovery"
         manifest.set("package",application_id)
-        manifest.set(namespace+"versionName","0.1")
-        manifest.set(namespace+"versionCode","11")
         for item in manifest.iter():
             if item.tag in("activity","service","receiver","provider","application","instrumentation"):
                 name=item.get(namespace+"name")

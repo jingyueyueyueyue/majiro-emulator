@@ -21,6 +21,9 @@ public final class ExternalSaveIO {
         final CountDownLatch completed=new CountDownLatch(1);
         volatile String result="CANCEL";
         volatile Exception failure;
+        boolean claimed;
+        volatile boolean cancelled;
+        boolean publishing;
         Request(String action,String data){this.action=action;this.data=data;}
     }
     private ExternalSaveIO(){}
@@ -43,7 +46,8 @@ public final class ExternalSaveIO {
                 activity.startActivityForResult(intent,request.requestCode);
             }catch(Exception failure){finish(request,"CANCEL",failure);}
         }});
-        request.completed.await();
+        try{request.completed.await();}
+        catch(InterruptedException interrupted){cancel(request);throw interrupted;}
         if(request.failure!=null)throw request.failure;
         return request.result;
     }
@@ -56,33 +60,47 @@ public final class ExternalSaveIO {
     public static boolean result(final Activity activity,int code,int result,Intent data){
         if((code&0xe000)!=REQUEST_FAMILY)return false;
         final Request request;
-        synchronized(ExternalSaveIO.class){request=pending;}
-        if(request==null)return true;
-        if(code!=request.requestCode)return true;
+        synchronized(ExternalSaveIO.class){
+            request=pending;
+            if(request==null||code!=request.requestCode||request.claimed)return true;
+            request.claimed=true;
+        }
         if(result!=Activity.RESULT_OK||data==null||data.getData()==null){
             finish(request,"CANCEL",null);return true;
         }
         final Uri uri=data.getData();
         new Thread(new Runnable(){@Override public void run(){
             try{
+                synchronized(ExternalSaveIO.class){
+                    if(pending!=request)return;
+                    if(request.cancelled){finish(request,"CANCEL",null);return;}
+                }
                 if(request.action.equals("save")){
                     byte[] bytes=request.data.getBytes(StandardCharsets.UTF_8);
                     if(bytes.length>LIMIT)throw new IllegalArgumentException("external save encoded size bound");
                     try(OutputStream stream=activity.getContentResolver().openOutputStream(uri,"wt")){
                         if(stream==null)throw new IllegalStateException("external save destination unavailable");
-                        stream.write(bytes);stream.flush();
+                        synchronized(ExternalSaveIO.class){
+                            // A write already in progress cannot be undone by
+                            // SAF. Keep its ownership until completion and
+                            // report its actual result, not a premature CANCEL.
+                            if(!request.cancelled)request.publishing=true;
+                        }
+                        if(request.publishing){stream.write(bytes);stream.flush();}
                     }
-                    finish(request,"OK",null);
+                    finish(request,request.publishing?"OK":"CANCEL",null);
                 }else{
                     ByteArrayOutputStream bytes=new ByteArrayOutputStream();
                     try(InputStream stream=activity.getContentResolver().openInputStream(uri)){
                         if(stream==null)throw new IllegalStateException("external save source unavailable");
                         byte[] buffer=new byte[65536];int count;
                         while((count=stream.read(buffer))!=-1){
+                            if(request.cancelled)break;
                             if(bytes.size()>LIMIT-count)throw new IllegalArgumentException("external save size bound");
                             bytes.write(buffer,0,count);
                         }
                     }
+                    if(request.cancelled){finish(request,"CANCEL",null);return;}
                     byte[] raw=bytes.toByteArray();
                     for(byte value:raw)if(value<0)throw new IllegalArgumentException("external portable save must be ASCII");
                     finish(request,"OK\n"+new String(raw,StandardCharsets.US_ASCII),null);
@@ -94,6 +112,14 @@ public final class ExternalSaveIO {
     public static void cancel(){
         Request request;
         synchronized(ExternalSaveIO.class){request=pending;}
-        if(request!=null)finish(request,"CANCEL",null);
+        if(request!=null)cancel(request);
+    }
+    private static synchronized void cancel(Request request){
+        if(pending!=request||request.publishing)return;
+        request.cancelled=true;
+        // A claimed worker can still be inside an external provider. It
+        // retains the slot until it closes its stream, preventing a new
+        // exchange from racing a cancelled writer.
+        if(!request.claimed)finish(request,"CANCEL",null);
     }
 }

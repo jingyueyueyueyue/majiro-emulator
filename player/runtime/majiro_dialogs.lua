@@ -46,6 +46,9 @@ function M.install(define,state,options,saves)
   end
   for name,bits in pairs(flags)do
     local key,style=name,bits
+    if key=='dialog_warning_retrycancel'then
+      style=(options.dialog_controls or{}).warning_retrycancel_flags or style
+    end
     local provider=function(vm,args,wants)
       local error_dialog=key:sub(1,13)=='dialog_error_'
       if error_dialog and not options.testplay then return style%16==0 and 0 or 1 end
@@ -136,12 +139,19 @@ function M.install(define,state,options,saves)
     poll=function(vm)
       if not current then return false end
       local request=current
+      vm:save_thread()
       local owner=vm.threads[request.thread]
-      if not owner or owner.finished or request.generation~=vm.context_generation then
+      if not owner or owner.finished or owner.terminate_requested or request.generation~=vm.context_generation then
         pcall(host,vm,'cancel',request)
         current=nil;vm.modal_dialog=nil
         state.settings.save,state.settings.save_menu=request.save,request.save_menu
         failure(vm,'dialog owner context no longer exists')
+      end
+      if not owner.waiting or owner.waiting.kind~='dialog'or owner.waiting.token~=request.token then
+        pcall(host,vm,'cancel',request)
+        current=nil;vm.modal_dialog=nil
+        state.settings.save,state.settings.save_menu=request.save,request.save_menu
+        failure(vm,'dialog owner wait changed')
       end
       local result=host(vm,'poll',request)
       if result=='pending'then return true end

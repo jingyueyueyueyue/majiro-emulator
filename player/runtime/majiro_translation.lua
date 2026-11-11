@@ -51,11 +51,14 @@ function M.new(options)
     return options.mode=='online'and config.mode=='online'and config.ready==true
   end
   local function ident(script,row)
+    assert(not script.patch_source and not script.text_patch and not script.raw_patch_applied
+      and(not script.text_origin or script.text_origin=='original'),
+      'online translation received localized script data')
     local cached=ids[script]
     if not cached then cached={};ids[script]=cached end
     local key=tostring(row[1])..'\n'..row[3]
     if not cached[key]then
-      cached[key]='dialogue-v2:'..(script.source_sha256 or script.name)..':'..tostring(row[1])..':'..options.hash(row[3])
+      cached[key]='dialogue-v3-original:'..(script.source_sha256 or script.name)..':'..tostring(row[1])..':'..options.hash(row[3])
     end
     return cached[key]
   end

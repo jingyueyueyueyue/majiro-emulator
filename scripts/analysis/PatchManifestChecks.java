@@ -13,21 +13,19 @@ public final class PatchManifestChecks {
     public static void main(String[] args)throws Exception {
         JSONObject source=new JSONObject().put("schema",1)
             .put("script_layers",new JSONArray()
-                .put(new JSONObject().put("directory","patches/任意/scenario").put("kind","pinned_raw_patch"))
                 .put(new JSONObject().put("directory","patches/other/source").put("kind","source_mjo")))
             .put("archives",new JSONArray().put("patches/a/20.arc").put("patches/z/99.arc"))
             .put("image_archives",new JSONArray().put("patches/z/99.arc").put("patches/a/20.arc"))
-            .put("raw_metadata","patches/任意/metadata.lua")
             .put("text_adapter",new JSONObject().put("kind","sequential_text_v1").put("path","patches/other/data.lua"))
             .put("image_directory","patches/custom/images").put("font_directory","patches/common/fonts");
         PatchManifest parsed=PatchManifest.parse(source.toString(),true);
-        check(!parsed.legacy&&parsed.layers.size()==2,"explicit manifest");
+        check(!parsed.legacy&&parsed.layers.size()==1,"explicit manifest");
         check(parsed.explicit&&parsed.localArchives.equals(parsed.archives),"local archive declarations retained");
-        check(parsed.layerRows()[0].equals("pinned_raw_patch\tpatches/任意/scenario"),"first layer priority");
-        check(parsed.layerRows()[1].equals("source_mjo\tpatches/other/source"),"second layer priority");
+        check(parsed.layerRows()[0].equals("source_mjo\tpatches/other/source\tcp932"),"explicit source encoding");
         check(parsed.archives.get(0).equals("patches/a/20.arc")&&parsed.archives.get(1).equals("patches/z/99.arc"),
             "archive order is declared priority, independent of lexicographic path");
-        check(parsed.rawMetadata.equals("patches/任意/metadata.lua"),"raw metadata arbitrary authorized path");
+        JSONObject conflict=new JSONObject(source.toString()).put("raw_metadata","patches/任意/metadata.lua");
+        bad(conflict.toString());
         check(parsed.textKind.equals("sequential_text_v1")&&parsed.textPath.equals("patches/other/data.lua"),
             "text adapter dispatch is by format");
         JSONObject config=new JSONObject(parsed.configuration());
@@ -53,7 +51,8 @@ public final class PatchManifestChecks {
             boolean rejected=false;try{PatchManifest.path(path);}catch(IllegalArgumentException expected){rejected=true;}
             check(rejected,"unsafe patch path accepted");
         }
-        bad("{\"schema\":2}");bad("{\"schema\":1.5}");bad("{\"schema\":\"1\"}");
+        check(PatchManifest.parse("{\"schema\":2}",true).schema==2,"explicit encoding schema");
+        bad("{\"schema\":3}");bad("{\"schema\":1.5}");bad("{\"schema\":\"1\"}");
         bad("{\"schema\":1,\"script_layers\":[{\"directory\":\"patches/x\",\"kind\":\"exe\"}]}");
         bad("{\"schema\":1,\"script_layers\":[{\"directory\":\"patches/x\",\"kind\":\"pinned_raw_patch\"}]}");
         bad("{\"schema\":1,\"archives\":[\"patches/a.exe\"]}");

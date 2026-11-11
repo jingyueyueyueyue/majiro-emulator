@@ -42,15 +42,35 @@ def run():
     lua.globals()["AUDIT_CONFIGURATION"]=configuration
     paths={"runtime/player_configuration.lua":"return {make=function()return AUDIT_CONFIGURATION end}",
            "scripts/opcodes.lua":"return {}","scripts/syscall_names.lua":"return {}",
+           "runtime/majiro_text_resources.lua":player_path("runtime/majiro_text_resources.lua").read_text(encoding="utf8"),
            "runtime/majiro_codec.lua":"return {}",
            "runtime/majiro_store.lua":"return {new=function()return {load_index=function()return {}end}end}"}
     host["asset_text"]=lambda path:paths[path]
     host["game_text"]=lambda path:None
+    text_events=[]
+    host["text_mode"]=lambda:"original"
+    host["text_resource_names"]=lambda:lua.table_from(["start.mjo"])
+    def script(name):
+        assert name=="start.mjo"
+        lua.globals()["PLAYER_VERIFY_TEXT_RESOURCE"](name,"b"*64,"original",name)
+        text_events.append(("script",name))
+        return lua.table_from({"name":name})
+    def storage(request):
+        assert request.startswith("sha256\n"),"unexpected fixture storage operation"
+        return"OK "+hashlib.sha256(request[7:].encode("utf8")).hexdigest()
+    host["script"]=script
+    host["storage"]=storage
+    host["seal_text_resources"]=lambda:text_events.append(("sealed",))
+    host["set_text_identity"]=lambda identity,encoding:text_events.append(("identity",identity,encoding))
     host["archive_control"]=lambda action,name:0
     host["member_names"]=lambda:lua.table_from(["new.cfg","new.rct"])
     host["image_metadata"]=lambda name:lua.table_from({"width":3,"height":7})
     lua.globals()["HOST"]=host
     options=lua.execute(prefix+"\nreturn options\n")
+    expected_identity=hashlib.sha256(("verified-text-v2\n"+"a"*64+"\nvm:cp932").encode("utf8")).hexdigest()
+    assert text_events==[("script","start.mjo"),("sealed",),("identity",expected_identity,"cp932")]
+    assert options["source_identity"]==expected_identity
+    checks.append("production boot preflights original text, seals resources and publishes verified identity before archive refresh")
     options["archive"]("register","update.arc")
     assert options["source_generation"]==1
     assert options["resource_names"]["new.cfg"]and options["image_metadata"]["new.rct"]["height"]==7

@@ -34,6 +34,8 @@ struct Page {
     std::vector<uint8_t> rgba;
 };
 static std::map<int,Page> pages;
+static std::map<int,Page> checkpoint_pages;
+static bool checkpoint_active=false;
 static std::vector<std::wstring> private_fonts;
 static std::vector<uint8_t> last_presented;
 static int last_width=0,last_height=0;
@@ -91,6 +93,9 @@ static Page allocate(int w,int h,bool alpha) {
     const size_t bytes=size_t(w)*size_t(h)*4;
     require(bytes<=PAGE_LIMIT && used()+bytes<=TOTAL_LIMIT,"page memory budget exceeded");
     Page p;p.w=w;p.h=h;p.alpha=alpha;p.rgba.resize(bytes,0);
+    // Original indexed allocation (0x475030) installs a grayscale palette.
+    // Alpha pages share allocation and can later become visible source pages.
+    for(unsigned i=0;i<256;++i)p.palette[i]=0xff000000u|i*0x010101u;
     if(!alpha)for(size_t i=3;i<bytes;i+=4)p.rgba[i]=255;
     return p;
 }
@@ -286,20 +291,22 @@ static void composite(Page& destination,const Page& source,int sx,int sy,int w,i
     if(allow_fast&&source.depth==32&&xs==1&&ys==1&&std::fmod(angle,360.0)==0&&
        base_x==std::floor(base_x)&&base_y==std::floor(base_y)){
         if(base_x>=destination.w||base_y>=destination.h||base_x+w<=0||base_y+h<=0)return;
-        const int dx0=int(base_x),dy0=int(base_y);
-        const int left=std::max({0,-sx,-dx0,clipx-dx0});
-        const int top=std::max({0,-sy,-dy0,clipy-dy0});
-        const int right=std::min({w,source.w-sx,destination.w-dx0,clipx+clipw-dx0});
-        const int bottom=std::min({h,source.h-sy,destination.h-dy0,clipy+cliph-dy0});
+        const int64_t dx0=int64_t(base_x),dy0=int64_t(base_y);
+        const int64_t left=std::max({int64_t(0),-int64_t(sx),-dx0,int64_t(clipx)-dx0});
+        const int64_t top=std::max({int64_t(0),-int64_t(sy),-dy0,int64_t(clipy)-dy0});
+        const int64_t right=std::min({int64_t(w),int64_t(source.w)-sx,
+            int64_t(destination.w)-dx0,int64_t(clipx)+clipw-dx0});
+        const int64_t bottom=std::min({int64_t(h),int64_t(source.h)-sy,
+            int64_t(destination.h)-dy0,int64_t(clipy)+cliph-dy0});
         if(right<=left||bottom<=top)return;
-        for(int yy=top;yy<bottom;++yy){
+        for(int64_t yy=top;yy<bottom;++yy){
             size_t from=(size_t(sy+yy)*source.w+sx+left)*4;
             size_t to=(size_t(dy0+yy)*destination.w+dx0+left)*4;
-            const size_t bytes=size_t(std::max(0,right-left))*4;
+            const size_t bytes=size_t(right-left)*4;
             if(!special&&!has_mask&&anti==0&&!destination.antidata){
                 std::memcpy(destination.rgba.data()+to,source.rgba.data()+from,bytes);continue;
             }
-            for(int xx=left;xx<right;++xx,from+=4,to+=4){
+            for(int64_t xx=left;xx<right;++xx,from+=4,to+=4){
                 const uint8_t alpha=mask_pixels?uint8_t(255-mask_pixels[from]):source.rgba[from+3];
                 auto* out=destination.rgba.data()+to;
                 const auto* color=source.rgba.data()+from;
@@ -335,13 +342,13 @@ static void composite(Page& destination,const Page& source,int sx,int sy,int w,i
     if(max_x<=0||max_y<=0||min_x>=destination.w||min_y>=destination.h)return;
     int left=int(std::max(0.0,std::floor(min_x))),right=int(std::min(double(destination.w),std::ceil(max_x)));
     int top=int(std::max(0.0,std::floor(min_y))),bottom=int(std::min(double(destination.h),std::ceil(max_y)));
-    left=std::max(left,clipx);right=std::min(right,clipx+clipw);
-    top=std::max(top,clipy);bottom=std::min(bottom,clipy+cliph);
+    left=std::max(left,clipx);right=int(std::min(int64_t(right),int64_t(clipx)+clipw));
+    top=std::max(top,clipy);bottom=int(std::min(int64_t(bottom),int64_t(clipy)+cliph));
     for(int dy=top;dy<bottom;++dy)for(int dx=left;dx<right;++dx){
         const double rx=dx+0.5-x,ry=dy+0.5-y;
         const double u=(cs*rx+sn*ry)/xs+origin_x,v=(-sn*rx+cs*ry)/ys+origin_y;
         if(u<0||v<0||u>=w||v>=h)continue;
-        int px=sx+int(std::floor(u)),py=sy+int(std::floor(v));
+        int64_t px=int64_t(sx)+int64_t(std::floor(u)),py=int64_t(sy)+int64_t(std::floor(v));
         if(px<0||py<0||px>=source.w||py>=source.h)continue;
         const size_t from=(size_t(py)*source.w+px)*4,to=(size_t(dy)*destination.w+dx)*4;
         uint8_t color[4];
@@ -526,6 +533,20 @@ static std::string run(const std::string& request) {
     if(op=="create"){int id,w,h,a;require(bool(in>>id>>w>>h>>a),"create arguments");
         int depth=32;in>>depth;require(depth==8||depth==32,"invalid pixel depth");
         auto p=allocate(w,h,a!=0);p.depth=depth;put(id,std::move(p));return "OK";}
+    if(op=="checkpoint_begin"){
+        require(!checkpoint_active,"nested graphics checkpoint transaction");
+        // Page vectors, palettes, alpha associations and pending releases
+        // all have value semantics. Keep a full independent transaction.
+        checkpoint_pages=pages;checkpoint_active=true;return "OK";
+    }
+    if(op=="checkpoint_rollback"){
+        require(checkpoint_active,"graphics checkpoint transaction missing");
+        pages=std::move(checkpoint_pages);checkpoint_pages.clear();checkpoint_active=false;return "OK";
+    }
+    if(op=="checkpoint_commit"){
+        require(checkpoint_active,"graphics checkpoint transaction missing");
+        checkpoint_pages.clear();checkpoint_active=false;return "OK";
+    }
     if(op=="load"||op=="load8"){int id,a;require(bool(in>>id>>a),"load arguments");
         put(id,load(path_arg(in),a!=0,op=="load8"));return "OK";}
     if(op=="release"){int id;require(bool(in>>id),"release arguments");
@@ -655,10 +676,17 @@ static std::string run(const std::string& request) {
     if(op=="copy" || op=="extcopy"){
         int source,sx,sy,w,h,dest,dx,dy;
         require(bool(in>>source>>sx>>sy>>w>>h>>dest>>dx>>dy),"copy arguments");
-        int anti=0;if(op=="extcopy")in>>anti;
+        int anti=0,color_bytes=4,indexed_extcopy=1;
+        if(op=="extcopy"){
+            in>>anti;
+            if(in>>color_bytes)require(bool(in>>indexed_extcopy),"extcopy storage profile");
+            require((color_bytes==3||color_bytes==4)&&(indexed_extcopy==0||indexed_extcopy==1),
+                "extcopy storage profile invalid");
+        }
         require(anti>=0 && anti<=255,"transparency out of range");
         if(w<=0||h<=0)return "OK";
         Page& s=get(source);Page& d=get(dest);
+        if(op=="extcopy"&&!indexed_extcopy&&d.depth==8)return "OK";
         const int64_t left=std::max({int64_t(0),-int64_t(sx),-int64_t(dx)});
         const int64_t top=std::max({int64_t(0),-int64_t(sy),-int64_t(dy)});
         const int64_t right=std::min({int64_t(w),int64_t(s.w)-sx,int64_t(d.w)-dx});
@@ -666,48 +694,134 @@ static std::string run(const std::string& request) {
         if(right>left && bottom>top){
             const size_t row_bytes=size_t(right-left)*4;
             const bool copying=op=="copy";
+            // Original 0x47DB50 expands indexed pixels through their palette;
+            // 0x47D970 takes the red channel when copying RGB to an 8-bit page.
+            // Extended RGB -> indexed is rejected by the original wrapper.
+            if(s.depth!=d.depth){
+                if(!copying&&d.depth==8)return "OK";
+                for(int64_t yy=top;yy<bottom;++yy)for(int64_t xx=left;xx<right;++xx){
+                    const size_t from=(size_t(sy+yy)*s.w+size_t(sx+xx))*4;
+                    const size_t to=(size_t(dy+yy)*d.w+size_t(dx+xx))*4;
+                    if(d.depth==8){
+                        d.rgba[to]=d.rgba[to+1]=d.rgba[to+2]=s.rgba[from];
+                    }else{
+                        const uint32_t color=s.palette[s.rgba[from]];
+                        for(int c=0;c<3;++c){
+                            const unsigned value=(color>>((2-c)*8))&255;
+                            // Palette extcopy uses two separately truncated
+                            // lookup tables, unlike the packed RGB row blend.
+                            d.rgba[to+c]=copying?uint8_t(value):uint8_t(
+                                ((unsigned(d.rgba[to+c])*(anti+1))>>8)+
+                                ((value*(256-anti))>>8));
+                        }
+                    }
+                }
+                return "OK";
+            }
             const bool masked=s.alpha||s.antidata;
-            if(source!=dest&&copying&&!masked){
-                for(int64_t y=top;y<bottom;++y)
-                    std::memcpy(d.rgba.data()+(size_t(int64_t(dy)+y)*d.w+size_t(int64_t(dx)+left))*4,
+            if(!copying){
+                const int64_t span=right-left,rows=bottom-top;
+                if(masked){
+                    // Masked RGB kernels walk live pixels left-to-right,
+                    // top-to-bottom. The reverse-alpha union is a separate
+                    // pass after every color row, even for overlapping pages.
+                    for(int64_t yy=top;yy<bottom;++yy)for(int64_t xx=left;xx<right;++xx){
+                        const size_t from=(size_t(sy+yy)*s.w+size_t(sx+xx))*4;
+                        const size_t to=(size_t(dy+yy)*d.w+size_t(dx+xx))*4;
+                        const int transparency=255-alpha_at(s,from/4)+anti;
+                        if(transparency>=255||((color_bytes==3||anti>0)&&transparency>=254))continue;
+                        const bool direct=transparency<=(color_bytes==3?1:0);
+                        for(int c=0;c<color_bytes;++c)
+                            d.rgba[to+c]=direct?s.rgba[from+c]:uint8_t(
+                                (unsigned(d.rgba[to+c])*(transparency+1)+
+                                 unsigned(s.rgba[from+c])*(256-transparency))>>8);
+                    }
+                    if(d.antidata)for(int64_t yy=top;yy<bottom;++yy)for(int64_t xx=left;xx<right;++xx){
+                        const size_t from=(size_t(sy+yy)*s.w+size_t(sx+xx))*4;
+                        const size_t to=(size_t(dy+yy)*d.w+size_t(dx+xx))*4;
+                        auto& target=get(d.antidata);
+                        const unsigned mask=255-alpha_at(s,from/4);
+                        const auto value=uint8_t(unsigned(target.rgba[to])*(mask+1)>>8);
+                        target.rgba[to]=target.rgba[to+1]=target.rgba[to+2]=value;
+                    }
+                }else{
+                    if(source!=dest){
+                        // Distinct buffers cannot observe traversal order.
+                        // Avoid byte-view division and scratch allocation.
+                        const int channels=s.depth==8?3:color_bytes;
+                        for(int64_t yy=top;yy<bottom;++yy){
+                            size_t from=(size_t(sy+yy)*s.w+size_t(sx+left))*4;
+                            size_t to=(size_t(dy+yy)*d.w+size_t(dx+left))*4;
+                            for(int64_t xx=left;xx<right;++xx,from+=4,to+=4)
+                                for(int c=0;c<channels;++c)d.rgba[to+c]=uint8_t(
+                                    (unsigned(d.rgba[to+c])*(anti+1)+
+                                     unsigned(s.rgba[from+c])*(256-anti))>>8);
+                        }
+                        return "OK";
+                    }
+                    // Original uniform-alpha MMX kernel handles the 1/2-byte
+                    // prefix forward, then four-byte blocks backward. BGR24
+                    // blocks cross pixel boundaries; map that byte view onto
+                    // RGBA storage instead of freezing the source rectangle.
+                    const int bytes=s.depth==8?1:color_bytes;
+                    const int64_t length=span*bytes,prefix=length%4;
+                    for(int64_t row=0;row<rows;++row){
+                        const int64_t yy=sy>dy?top+row:bottom-1-row;
+                        const size_t from=(size_t(sy+yy)*s.w+size_t(sx+left))*4;
+                        const size_t to=(size_t(dy+yy)*d.w+size_t(dx+left))*4;
+                        auto at=[&](size_t start,int64_t offset){
+                            const int channel=bytes==1?0:offset%bytes==3?3:2-int(offset%bytes);
+                            return start+size_t(offset/bytes)*4+channel;
+                        };
+                        auto block=[&](int64_t offset,int count){
+                            uint8_t values[4]{};
+                            for(int i=0;i<count;++i)values[i]=uint8_t(
+                                (unsigned(d.rgba[at(to,offset+i)])*(anti+1)+
+                                 unsigned(s.rgba[at(from,offset+i)])*(256-anti))>>8);
+                            for(int i=0;i<count;++i){
+                                const size_t target=at(to,offset+i);
+                                d.rgba[target]=values[i];
+                                if(bytes==1)d.rgba[target+1]=d.rgba[target+2]=values[i];
+                            }
+                        };
+                        for(int64_t i=0;i<prefix;++i)block(i,1);
+                        for(int64_t i=length-4;i>=prefix;i-=4)block(i,4);
+                    }
+                }
+                return "OK";
+            }
+            if(!masked){
+                // A direction-aware row memmove gives the same original
+                // copy pixels without a full-frame scratch and unused mask.
+                for(int64_t row=0;row<bottom-top;++row){
+                    const int64_t y=source==dest&&dy>sy?bottom-1-row:top+row;
+                    std::memmove(d.rgba.data()+(size_t(int64_t(dy)+y)*d.w+size_t(int64_t(dx)+left))*4,
                         s.rgba.data()+(size_t(int64_t(sy)+y)*s.w+size_t(int64_t(sx)+left))*4,row_bytes);
+                }
                 return "OK";
             }
             std::vector<uint8_t> frozen(row_bytes*size_t(bottom-top));
-            std::vector<uint8_t> frozen_mask(size_t(right-left)*size_t(bottom-top));
+            std::vector<uint8_t> frozen_mask(d.antidata?size_t(right-left)*size_t(bottom-top):0);
             for(int64_t y=top;y<bottom;++y) {
                 std::memcpy(frozen.data()+size_t(y-top)*row_bytes,
                     s.rgba.data()+(size_t(int64_t(sy)+y)*s.w+size_t(int64_t(sx)+left))*4,row_bytes);
                 if(masked)for(int64_t x=left;x<right;++x){
                     const auto alpha=alpha_at(s,size_t(int64_t(sy)+y)*s.w+size_t(int64_t(sx)+x));
-                    frozen_mask[size_t(y-top)*size_t(right-left)+size_t(x-left)]=uint8_t(255-alpha);
-                    if(copying)frozen[size_t(y-top)*row_bytes+size_t(x-left)*4+3]=alpha;
+                    if(d.antidata)frozen_mask[size_t(y-top)*size_t(right-left)+size_t(x-left)]=uint8_t(255-alpha);
+                    frozen[size_t(y-top)*row_bytes+size_t(x-left)*4+3]=alpha;
                 }
             }
             for(int64_t y=top;y<bottom;++y) {
                 auto* destination=d.rgba.data()+(size_t(int64_t(dy)+y)*d.w+size_t(int64_t(dx)+left))*4;
                 const auto* from=frozen.data()+size_t(y-top)*row_bytes;
-                if(copying)std::memcpy(destination,from,row_bytes);
-                else for(size_t x=0;x<row_bytes;x+=4){
-                        const int mask=masked?frozen_mask[size_t(y-top)*size_t(right-left)+x/4]:0;
-                    const int transparency=mask+anti;
-                    if(transparency>=255||(masked&&anti>0&&transparency>=254))continue;
-                    if(transparency==0){std::memcpy(destination+x,from+x,4);continue;}
-                    for(int c=0;c<4;++c)destination[x+c]=uint8_t(
-                        (destination[x+c]*(transparency+1)+from[x+c]*(256-transparency))>>8);
-                }
+                std::memcpy(destination,from,row_bytes);
                 // Original grp_copy copies an associated mask only when
                 // both pages have one. An ordinary RGB caption/button
                 // strip must retain the destination's existing silhouette.
                 if(d.antidata&&masked)for(int64_t x=left;x<right;++x){
                     const size_t pixel=size_t(int64_t(dy)+y)*d.w+size_t(int64_t(dx)+x);
                     auto& mask=get(d.antidata);
-                    const int source_mask=masked?
-                        frozen_mask[size_t(y-top)*size_t(right-left)+size_t(x-left)]:0;
-                    // Original 0x47CC50 unions associated masks separately
-                    // from the fourth RGB storage byte and uniform fade.
-                    const uint8_t value=copying?uint8_t(source_mask):
-                        uint8_t(mask.rgba[pixel*4]*(source_mask+1)>>8);
+                    const uint8_t value=frozen_mask[size_t(y-top)*size_t(right-left)+size_t(x-left)];
                     mask.rgba[pixel*4]=mask.rgba[pixel*4+1]=mask.rgba[pixel*4+2]=value;
                 }
             }
@@ -791,8 +905,8 @@ static std::string run(const std::string& request) {
             "thumbnail source rectangle outside page");
         const int cw=w/dw,ch=h/dh;
         const int offsets[4][2]={{cw/5,ch/5},{2*cw/5,3*ch/5},{3*cw/5,4*ch/5},{4*cw/5,2*ch/5}};
-        for(int y=std::max(0,-dy);y<std::min<int64_t>(dh,int64_t(output.h)-dy);++y)
-            for(int x=std::max(0,-dx);x<std::min<int64_t>(dw,int64_t(output.w)-dx);++x){
+        for(int64_t y=std::max(int64_t(0),-int64_t(dy));y<std::min<int64_t>(dh,int64_t(output.h)-dy);++y)
+            for(int64_t x=std::max(int64_t(0),-int64_t(dx));x<std::min<int64_t>(dw,int64_t(output.w)-dx);++x){
                 const int px=sx+int(int64_t(w)*x/dw),py=sy+int(int64_t(h)*y/dh);
                 const size_t to=(size_t(y+dy)*output.w+size_t(x+dx))*4;
                 for(int c=0;c<3;++c){
@@ -841,8 +955,8 @@ static std::string run(const std::string& request) {
         for(auto& value:table)require(bool(in>>value),"fuchidori lookup");
         const int64_t width=std::min(s.w,mask.w),height=std::min(s.h,mask.h);
         const bool alpha=s.antidata&&d.antidata;
-        for(int64_t y=std::max(0,-dy);y<std::min<int64_t>(height,int64_t(d.h)-dy);++y)
-            for(int64_t x=std::max(0,-dx);x<std::min<int64_t>(width,int64_t(d.w)-dx);++x){
+        for(int64_t y=std::max(int64_t(0),-int64_t(dy));y<std::min<int64_t>(height,int64_t(d.h)-dy);++y)
+            for(int64_t x=std::max(int64_t(0),-int64_t(dx));x<std::min<int64_t>(width,int64_t(d.w)-dx);++x){
                 const size_t from=(size_t(y)*s.w+x)*4,to=(size_t(y+dy)*d.w+size_t(x+dx))*4;
                 const uint32_t entry=table[mask.rgba[(size_t(y)*mask.w+x)*4]];
                 const unsigned code=entry>>24,group=code&0xc0,sub=code&0x30,amount=code&15;
@@ -939,7 +1053,7 @@ static std::string run(const std::string& request) {
         }return "OK";
     }
     if(op=="glyphs"){
-        int id,x,y,height,half;uint32_t color,shadow;
+        int id,height,half;int64_t x,y;uint32_t color,shadow;
         require(bool(in>>id>>x>>y>>height>>half>>color>>shadow),"glyph arguments");
         Page& p=get(id);require(p.depth==32&&height>0&&height<=256&&half>0&&half<=256,"glyph page/font");
         std::string face,advances,message;
@@ -981,7 +1095,7 @@ static std::string run(const std::string& request) {
             coverage[size_t(yy)*rw+xx]=uint8_t((sum+scale*scale/2)/(scale*scale));
         }
         auto paint=[&](int xx,int yy,int alpha,uint32_t rgb){
-            int px=x+xx-pad,py=y+yy-pad;
+            int64_t px=x+xx-pad,py=y+yy-pad;
             // CONSOLE_WROTE copies exactly this cell rectangle. Ink outside
             // it would survive the source's clear/copy and leak on black.
             if(!alpha||px<0||py<0||px>=p.w||py>=p.h||
@@ -1014,7 +1128,7 @@ static std::string run(const std::string& request) {
         return "OK "+std::to_string(total)+" "+std::to_string(height);
     }
     if(op=="text"){
-        int id,x,y,height,width,boxw,boxh,align;uint32_t color;
+        int id,height,width,boxw,boxh,align;int64_t x,y;uint32_t color;
         require(bool(in>>id>>x>>y>>height>>width>>color>>boxw>>boxh>>align),"text arguments");
         Page& p=get(id);require(p.depth==32 && height>0&&height<=256,"text page/font");
         std::string face,message;std::getline(in,face);std::getline(in,face);std::getline(in,message,'\0');
@@ -1057,7 +1171,7 @@ static std::string run(const std::string& request) {
             }else y+=(boxh-height)/2;
         }
         for(int yy=0;yy<rh;++yy)for(int xx=0;xx<rw;++xx){
-            const int dx=x+xx,dy=y+yy;if(dx<0||dy<0||dx>=p.w||dy>=p.h)continue;
+            const int64_t dx=x+xx,dy=y+yy;if(dx<0||dy<0||dx>=p.w||dy>=p.h)continue;
             int sum=0;
             for(int sy=0;sy<scale;++sy)for(int sx=0;sx<scale;++sx)
                 sum+=coverage[(size_t(yy*scale+sy)*sw+xx*scale+sx)*4];

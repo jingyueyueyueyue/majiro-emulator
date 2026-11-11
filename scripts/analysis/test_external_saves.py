@@ -5,11 +5,12 @@ import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"convert"))
 from port_common import ROOT,archive_dir,timestamp,write_json
 from lua_bridge import create_lua
+from player_paths import player_path
 
 
 def main():
     lua=create_lua();clock={"now":0};external={"document":None,"cancel":False};graphics={"staged":False}
-    def module(name):return lua.execute((ROOT/name).read_text(encoding="utf8"))
+    def module(name):return lua.execute(player_path(name).read_text(encoding="utf8"))
     def transport(action,data):
         if external["cancel"]:return"CANCEL"
         if action=="save":external["document"]=data;return"OK"
@@ -65,7 +66,8 @@ def main():
         assert failed and vm["globals"][1][123]==777 and not graphics["staged"],kind
         checks.append(kind+" rejection leaves current VM and pages unchanged")
     report={"schema":1,"timestamp":timestamp(),"status":"passed","checks":checks,
-            "native_story_import_supported":False,"android_document_picker_executed":False}
+            "runtime_root":"player/runtime","native_story_import_supported":False,
+            "android_document_picker_executed":False}
     folder=archive_dir("external_save_tests")
     write_json(ROOT/"reports/external_save_tests.json",report)
     write_json(folder/"20261110_external_save_tests.json",report)

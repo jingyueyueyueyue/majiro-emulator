@@ -40,6 +40,10 @@ def run():
                          "sound_ch_pan is absent in BOKUTSUBA and SWITCH"]}
     files = {"fixture.wav", "fixture.ogg", "only.ogg", "\u97f3.ogg"}
     for sample in samples:
+        if not any(row["name"]=="$music_pause" for row in by_name[sample["sample"]]["entries"]):
+            report["samples"].append({"sample":sample["sample"],"exe_sha256":sample["exe_sha256"],
+                "calls":[],"scope":"legacy transport covered by test_emulator_legacy_audio.py"})
+            continue
         oracle = NumberedAudioOracle(sample, by_name[sample["sample"]]["entries"])
         counts, failures, argc = Counter(), Counter(), {}
         # Every real array slot, including first/last and multibyte cached names.
@@ -73,6 +77,7 @@ def run():
             for request, loop in requests:
                 for disabled, ultra, master in ((False, False, 733), (False, False, 0),
                                                 (True, False, 733), (False, True, 733)):
+                    if ultra and oracle.ultra_slot is None:continue
                     cases.append(("$sound_ch", [index, request]+([] if loop is None else [loop]),
                                   {"gain": 413, "pan": 2345 if oracle.sound_pan else 0,
                                    "disabled": disabled, "ultra": ultra, "master": master}))

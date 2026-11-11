@@ -44,8 +44,10 @@ public final class GameBridge {
     private static Uri tree;
     private static String rootId;
     private static String sourceIdentity;
+    private static String textIdentity;
     private static PatchManifest patchManifest;
     private static volatile String launchTextMode;
+    private static volatile String launchFailure;
     private static final java.util.concurrent.atomic.AtomicInteger gameButtons=
         new java.util.concurrent.atomic.AtomicInteger();
     private static File gameFiles;
@@ -92,6 +94,7 @@ public final class GameBridge {
         open(activity,uri,null);
     }
     public static void open(Activity activity,String uri,String documentRoot) throws Exception {
+        launchFailure=null;
         DiagnosticLog.initialize(activity);
         context = activity;
         tree = Uri.parse(uri);
@@ -111,13 +114,13 @@ public final class GameBridge {
         gameButtons.set(0);
         GameWindowCommands.reset();
         GameTouchKeys.reset();
-        patchManifest=null;launchTextMode=TranslationSettings.load(activity).mode;
+        patchManifest=null;textIdentity=null;launchTextMode=TranslationSettings.load(activity).mode;
         if((activity.getApplicationInfo().flags&android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE)!=0) {
             String requestedMode=activity.getIntent().getStringExtra("diagnostic_mode");
             if("original".equals(requestedMode)||"local".equals(requestedMode))launchTextMode=requestedMode;
         }
         final String requestedTextMode=launchTextMode;
-        if("auto".equals(launchTextMode)){
+        if("auto".equals(launchTextMode)||"local".equals(launchTextMode)){
             PatchManifest candidate=patches();
             launchTextMode=TextMode.resolve(requestedTextMode,candidate,new TextMode.Resources(){
                 @Override public boolean file(String path) throws Exception{return resolve(path)!=null;}
@@ -175,7 +178,20 @@ public final class GameBridge {
         DiagnosticLog.write("game","source="+tree+" root="+rootId+" storage="+identity+" requested="+requestedTextMode+" text="+textMode);
     }
     public static void debugLog(String message){DiagnosticLog.write("runtime",message);}
+    public static void launchFailed(Exception error){
+        launchFailure="The selected text resources could not be opened.\n"+error.getMessage()+
+            "\nRestore the complete declared patch, or choose Original with the original game resources. Reopen the game after fixing the files.";
+        DiagnosticLog.failure("text-resources",error);
+    }
+    public static void requireReady(){
+        if(launchFailure!=null)throw new IllegalStateException(launchFailure);
+    }
     public static String sourceIdentity(){return sourceIdentity;}
+    public static void textIdentity(String identity){
+        if(identity==null||!identity.matches("[0-9a-f]{64}"))throw new IllegalArgumentException("invalid text identity");
+        if(textIdentity!=null&&!textIdentity.equals(identity))throw new IllegalStateException("text identity requires restart");
+        textIdentity=identity;
+    }
     public static String translationMode(){return launchTextMode!=null?launchTextMode:TranslationSettings.load(context).mode;}
     public static void requestOriginalMenu(){gameButtons.getAndUpdate(value->value|2);}
     public static int consumeGameButtons(){return gameButtons.getAndSet(0);}
@@ -216,7 +232,10 @@ public final class GameBridge {
                     if(out.size()+count>65536)throw new IllegalArgumentException("patch manifest byte limit");
                     out.write(block,0,count);
                 }
-                text=new String(out.toByteArray(),StandardCharsets.UTF_8);
+                text=StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                    .decode(java.nio.ByteBuffer.wrap(out.toByteArray())).toString();
             }
         }
         patchManifest=PatchManifest.parse(text,inspectLocal);
@@ -224,6 +243,20 @@ public final class GameBridge {
     }
     public static String patchConfiguration() throws Exception{return patches().configuration();}
     public static String[] patchLayers() throws Exception{return patches().layerRows();}
+    public static String archiveScope(String name)throws Exception{
+        return patches().archiveScope(key(name),"local".equals(translationMode()));
+    }
+    public static String[] patchResourceNames()throws Exception{
+        ArrayList<String> rows=new ArrayList<String>();
+        for(PatchManifest.Layer layer:patches().layers){
+            Uri directory=resolve(layer.directory);
+            if(directory==null)throw new IllegalArgumentException("declared script layer disappeared");
+            for(String name:children(DocumentsContract.getDocumentId(directory)).keySet()){
+                if(name.matches(".*\\.(mjo|cfg|env|txt)"))rows.add(layer.directory+"\t"+name);
+            }
+        }
+        return rows.toArray(new String[rows.size()]);
+    }
 
     private static String key(String text) {
         return text.replace('\\', '/').toLowerCase(Locale.ROOT);
@@ -257,10 +290,15 @@ public final class GameBridge {
     public static String[] archives() throws Exception {
         ArrayList<String> rows = new ArrayList<String>();
         PatchManifest patch=patches();
+        patch.validateIsolation(new TextMode.Resources(){
+            @Override public boolean file(String path)throws Exception{return resolve(path)!=null;}
+            @Override public boolean populated(String path){return false;}
+        });
         ArrayList<String> paths=new ArrayList<String>(patch.archives);
         java.util.HashSet<String> imageOnly=new java.util.HashSet<String>();
-        for(String name:patch.imageArchives)if(!paths.contains(name)){
-            paths.add(name);imageOnly.add(name);
+        for(String name:"local".equals(translationMode())?patch.imageArchives:patch.sharedImageArchives){
+            if(!paths.contains(name))paths.add(name);
+            imageOnly.add(name);
         }
         ArrayList<String> localArchives=new ArrayList<String>(patch.localArchives);
         for(String name:patch.imageArchives)if(!localArchives.contains(name))localArchives.add(name);
@@ -307,12 +345,13 @@ public final class GameBridge {
             if (fd == null) throw new IllegalStateException("cannot open archive");
             long length = fd.getStatSize();
             if (length < 0) length = Os.lseek(fd.getFileDescriptor(), 0, OsConstants.SEEK_END);
-            rows.add(name + "\t" + fd.detachFd() + "\t" + length+
-                (imageOnly.contains(name)?"\timages":""));
+            rows.add(name + "\t" + fd.detachFd() + "\t" + length+"\t"+
+                patch.archiveScope(name,"local".equals(translationMode())));
         }
         return rows.toArray(new String[rows.size()]);
     }
     public static String openArchive(String name) throws Exception{
+        if("blocked".equals(archiveScope(name)))throw new IllegalArgumentException("archive is outside active text mode");
         if(duplicateArchives.containsKey(key(name))){
             DiagnosticLog.write("archive","duplicate local patch registration skipped: "+name);
             return "ABSENT";
@@ -344,7 +383,7 @@ public final class GameBridge {
                 String path=layer.directory;
                 Uri overlay=resolve(path);
                 if(overlay!=null)for(String name:children(DocumentsContract.getDocumentId(overlay)).keySet()){
-                    if(name.endsWith(".mjo")||name.endsWith(".cfg"))if(!names.contains(name))names.add(name);
+                    if(name.matches(".*\\.(mjo|cfg|env|txt)"))if(!names.contains(name))names.add(name);
                 }
         }
         return names.toArray(new String[names.size()]);
@@ -380,8 +419,11 @@ public final class GameBridge {
                 DiagnosticLog.write("engine","optional engine version hints unavailable: "+path);
                 continue;
             }
-            for(String feature:EngineFeatures.from(implementation.toByteArray()))
-                if(!rows.contains(feature))rows.add(feature);
+            String[] features=EngineFeatures.from(implementation.toByteArray());
+            if(features.length==0)continue;
+            rows.add("engine-source:begin");
+            for(String feature:features)rows.add(feature);
+            rows.add("engine-source:end");
         }
         return rows.toArray(new String[rows.size()]);
     }
@@ -480,7 +522,8 @@ public final class GameBridge {
             throw new IllegalArgumentException("invalid script output path");
         for(String part:name.split("/"))if(part.equals(".."))
             throw new IllegalArgumentException("parent script output path");
-        File base=new File(gameFiles,"script-files");
+        if(textIdentity==null)throw new IllegalStateException("script output identity is not initialized");
+        File base=new File(gameFiles,"script-files/text-v2/"+textIdentity);
         File file=new File(base,name);
         if(!file.getCanonicalPath().startsWith(base.getCanonicalPath()+File.separator))
             throw new IllegalArgumentException("script output escaped game directory");
@@ -544,6 +587,21 @@ public final class GameBridge {
     public static int[] glyphs(String face, int height, int[] steps, String message, boolean boxed) {
         final int quality=fontQualityMode==0?1:4;
         int[] codepoints = message.codePoints().toArray();
+        if(height<=0||height>4096||steps==null||(boxed?steps.length<2:steps.length!=codepoints.length))
+            throw new IllegalArgumentException("invalid glyph host geometry");
+        // Measurement and rasterization must use the same font on the first
+        // call too; loading a private face after measuring changes wrapping.
+        if (customTypeface == null) {
+            try {
+                byte[] bytes = readFile("patches/fonts/SourceHanSansSC-Regular.otf");
+                if (bytes != null) {
+                    File file = new File(context.getCacheDir(), "SourceHanSansSC-Regular.otf");
+                    if (!file.isFile() || file.length() != bytes.length)
+                        try (FileOutputStream output = new FileOutputStream(file)) { output.write(bytes); }
+                    customTypeface = Typeface.createFromFile(file);
+                }
+            } catch (Exception error) { throw new IllegalStateException("private font load failed", error); }
+        }
         int half = boxed ? steps[0] : 0;
         int boxw = boxed ? steps[1] : 0;
         Paint measure = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
@@ -566,21 +624,11 @@ public final class GameBridge {
             advances.add(advance); xs.add(x); ys.add(y); x += advance;
         }
         int w = Math.max(1, Math.max(max, x)), h = Math.max(height, y + height);
-        if ((long) w * h > 16 * 1024 * 1024) throw new IllegalStateException("glyph raster memory limit");
+        if ((long) w * h * quality * quality > 16 * 1024 * 1024)
+            throw new IllegalStateException("glyph raster memory limit");
         Bitmap bitmap = Bitmap.createBitmap(w * quality, h * quality, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
-        if (customTypeface == null) {
-            try {
-                byte[] bytes = readFile("patches/fonts/SourceHanSansSC-Regular.otf");
-                if (bytes != null) {
-                    File file = new File(context.getCacheDir(), "SourceHanSansSC-Regular.otf");
-                    if (!file.isFile() || file.length() != bytes.length)
-                        try (FileOutputStream output = new FileOutputStream(file)) { output.write(bytes); }
-                    customTypeface = Typeface.createFromFile(file);
-                }
-            } catch (Exception error) { throw new IllegalStateException("private font load failed", error); }
-        }
         paint.setTypeface(PatchTypography.apply(face, privateFace!=null?privateFace:
             customTypeface != null ? customTypeface : Typeface.create(PatchTypography.family(face), Typeface.NORMAL)));
         paint.setTextSize(height * quality);
@@ -1104,12 +1152,15 @@ public final class GameBridge {
         if (action.equals("pause")) return audioLifecycle.pause(id);
         if (action.equals("resume")) return audioLifecycle.resume(id);
         if (action.equals("stop")) {
+            audioFades.remove(id);
             if (player != null) { audioLifecycle.removed(player); players.remove(id); player.release(); }
             MediaPlayer next = nextPlayers.remove(id);
             if (next != null) next.release();
+            audioSourcePaths.remove(id);levels.remove(id);
             return true;
         }
         if (action.equals("play")) {
+            audioFades.remove(id);
             audioCompletion.put(id,false);
             audioSourcePaths.put(id,file);
             if (player != null) { audioLifecycle.removed(player); players.remove(id); player.release(); }
@@ -1178,58 +1229,19 @@ public final class GameBridge {
         }
         if (action.equals("volume") || action.equals("pan")) {
             if (fade <= 0 || action.equals("pan")) {
+                audioFades.remove(id);
                 applyVolume(player, volume, pan);
                 MediaPlayer next = nextPlayers.get(id);
                 if (next != null) applyVolume(next, volume, pan);
                 levels.put(id, volume);
             } else {
-                final MediaPlayer owner = player; final String channel = id;
-                final int target = volume, position = pan, milliseconds = fade;
-                final int initial = levels.containsKey(channel) ? levels.get(channel) : 1000;
-                new Thread(new Runnable() {
-                    @Override public void run() {
-                        long began = android.os.SystemClock.uptimeMillis();
-                        while (true) {
-                            long elapsed = android.os.SystemClock.uptimeMillis() - began;
-                            synchronized (GameBridge.class) {
-                                if (players.get(channel) != owner) return;
-                                int value = elapsed >= milliseconds ? target
-                                    : initial + (int) ((target - initial) * elapsed / milliseconds);
-                                applyVolume(owner, value, position); levels.put(channel, value);
-                                MediaPlayer next = nextPlayers.get(channel);
-                                if (next != null) applyVolume(next, value, position);
-                                if (elapsed >= milliseconds) return;
-                            }
-                            android.os.SystemClock.sleep(10);
-                        }
-                    }
-                }, "majiro-volume-fade").start();
+                startAudioFade(id,volume,pan,fade,false);
             }
             return true;
         }
         if (action.equals("fadeout")) {
-            // Fade on the actual audio player; release only that generation.
-            final MediaPlayer owner = player; final String channel = id;
-            final int milliseconds = Math.max(0, fade), initial = volume, position = pan;
-            new Thread(new Runnable() {
-                @Override public void run() {
-                    long began = android.os.SystemClock.uptimeMillis();
-                    while (true) {
-                        long elapsed = android.os.SystemClock.uptimeMillis() - began;
-                        synchronized (GameBridge.class) {
-                            if (players.get(channel) != owner) return;
-                            if (elapsed >= milliseconds) {
-                                audioLifecycle.removed(owner); players.remove(channel); owner.release();
-                                MediaPlayer next = nextPlayers.remove(channel);
-                                if (next != null) next.release();
-                                return;
-                            }
-                            applyVolume(owner, (int) (initial * (milliseconds - elapsed) / milliseconds), position);
-                        }
-                        android.os.SystemClock.sleep(10);
-                    }
-                }
-            }, "majiro-audio-fade").start();
+            if(fade<=0)return audio("stop",id,"","",false,0,0,0,0,false);
+            startAudioFade(id,0,pan,fade,true);
             return true;
         }
         throw new IllegalArgumentException("unknown audio operation: " + action);
@@ -1242,6 +1254,41 @@ public final class GameBridge {
                         level * (balance < 0 ? 1 + balance : 1));
     }
     private static final HashMap<String, Integer> levels = new HashMap<String, Integer>();
+    private static final HashMap<String, Object> audioFades = new HashMap<String, Object>();
+
+    private static void startAudioFade(final String channel,final int target,final int pan,
+                                       final int duration,final boolean stop) {
+        final Object ticket=new Object();
+        audioFades.put(channel,ticket);
+        final int initial=levels.containsKey(channel)?levels.get(channel):1000;
+        new Thread(new Runnable(){@Override public void run(){
+            final long began=android.os.SystemClock.uptimeMillis();
+            while(true){
+                long elapsed=android.os.SystemClock.uptimeMillis()-began;
+                synchronized(GameBridge.class){
+                    // A transport replacement or newer gain command revokes
+                    // this fade. Intro -> loop promotion keeps its channel.
+                    if(audioFades.get(channel)!=ticket)return;
+                    try{
+                        MediaPlayer owner=currentAudio(channel);
+                        if(owner==null){audioFades.remove(channel);return;}
+                        if(stop&&elapsed>=duration){
+                            audio("stop",channel,"","",false,0,0,0,0,false);return;
+                        }
+                        int gain=elapsed>=duration?target:
+                            (int)(initial+((long)target-initial)*elapsed/duration);
+                        applyVolume(owner,gain,pan);levels.put(channel,gain);
+                        MediaPlayer next=nextPlayers.get(channel);
+                        if(next!=null)applyVolume(next,gain,pan);
+                        if(elapsed>=duration){audioFades.remove(channel);return;}
+                    }catch(Exception failure){
+                        audioFades.remove(channel);mediaError="audio fade failed: "+failure;return;
+                    }
+                }
+                android.os.SystemClock.sleep(10);
+            }
+        }},"majiro-audio-fade").start();
+    }
 
     private static void observeAudio(final String channel, final MediaPlayer owner) {
         owner.setOnCompletionListener(new MediaPlayer.OnCompletionListener(){
@@ -1306,7 +1353,7 @@ public final class GameBridge {
         modalDialogs.close(); hideDialog();
         for (MediaPlayer player : players.values()) player.release();
         for (MediaPlayer player : nextPlayers.values()) player.release();
-        nextPlayers.clear(); levels.clear();
+        nextPlayers.clear(); levels.clear();audioFades.clear();
         players.clear(); mediaFiles.clear();audioCompletion.clear();audioSourcePaths.clear();
         audioLifecycle.reset();
         closeVideo();

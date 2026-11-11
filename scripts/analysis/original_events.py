@@ -24,6 +24,18 @@ class EventOracle(CallOracle):
                 break
         calls = [row.operands[0].imm for row in rows if row.mnemonic == "call"
                  and row.operands[0].type == capstone.CS_OP_IMM]
+        # Some original builds wire release to the hook-registration core.
+        # Recover that alias from the actual call targets, not a sample name.
+        hook_entry = self.entries["$event_hook"]["selected_va"]
+        hook_wrapper = list(md.disasm(bytes(self.machine.mem_read(hook_entry, 32)), hook_entry))
+        hook_helper = next(row.operands[0].imm for row in hook_wrapper if row.mnemonic == "call")
+        hook_calls = []
+        for row in md.disasm(bytes(self.machine.mem_read(hook_helper, 300)), hook_helper):
+            if row.mnemonic == "call" and row.operands[0].type == capstone.CS_OP_IMM:
+                hook_calls.append(row.operands[0].imm)
+            if row.mnemonic == "ret":
+                break
+        self.release_registers_hook = len(calls) == 4 and calls == hook_calls
         # cdecl builds call stack_top, CRC, release and push_int. The
         # optimized fastcall build inlines stack_top and calls three helpers.
         if self.resolve_va in calls:
@@ -48,17 +60,25 @@ class EventOracle(CallOracle):
                         reads.append(source.mem.disp)
             if row.mnemonic == "ret":
                 break
-        if len(reads)!=2 or not{reads[0],reads[0]+4}.issubset(writes)or reads[1]in(reads[0],reads[0]+4):
+        if self.release_registers_hook:
+            pair = sorted(reads)
+            if len(pair) != 2 or pair[1] != pair[0] + 4 or not set(pair).issubset(writes):
+                raise ValueError(f"original aliased event registration globals are ambiguous: {reads}")
+            self.event_head, self.event_tail = pair
+            self.release_lock = None
+        elif len(reads)!=2 or not{reads[0],reads[0]+4}.issubset(writes)or reads[1]in(reads[0],reads[0]+4):
             raise ValueError(f"original event globals are ambiguous: {reads}")
-        self.event_head, self.release_lock = reads
-        self.event_tail = self.event_head+4
+        else:
+            self.event_head, self.release_lock = reads
+            self.event_tail = self.event_head+4
         self.release_va = core
 
     def reset_events(self):
         for address in (self.event_head,self.event_tail,self.release_lock):
-            self.write_u32(address,0)
-        self.heap = self.DATA+0x70000
-        self.guest_allocations = {}
+            if address is not None:
+                self.write_u32(address,0)
+        self.heap = self.fixture_heap_start
+        self.guest_allocations = dict(self.permanent_allocations)
 
     def event_rows(self):
         result, visited = [], set()
@@ -85,7 +105,8 @@ class EventOracle(CallOracle):
         def setup(source):
             source.registry([{"code_base": source.operand-2, "functions": [
                 (0x12345678, 100), (0x12345679, 120), (0x1234567A, 100)]}])
-            source.write_u32(source.release_lock, int(locked))
+            if source.release_lock is not None:
+                source.write_u32(source.release_lock, int(locked))
 
         entry = self.entries[name]
         return self.execute("syscallp"if discard else"syscall", [(0, function), (2, string)],
