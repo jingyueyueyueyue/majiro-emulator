@@ -1,0 +1,36 @@
+{
+  "repository": "trigger-segfault/majiro-py",
+  "commit": "f7ec450d5b78f0ed6df603b8c0b0ed79748d9cee",
+  "files": [
+    {
+      "file": "references/majiro-py/opcodes.py",
+      "sha256": "440fef0094584f2bb84d52aa3d30468cc0442ad56c942cae248a796fae142ed2",
+      "bytes": 15673,
+      "url": "https://raw.githubusercontent.com/trigger-segfault/majiro-py/f7ec450d5b78f0ed6df603b8c0b0ed79748d9cee/src/mjotool/opcodes.py"
+    },
+    {
+      "file": "references/majiro-py/flags.py",
+      "sha256": "d0760551f96c298b20ae1d7dced855f9af722be32e450e063b69862e45446853",
+      "bytes": 20828,
+      "url": "https://raw.githubusercontent.com/trigger-segfault/majiro-py/f7ec450d5b78f0ed6df603b8c0b0ed79748d9cee/src/mjotool/flags.py"
+    },
+    {
+      "file": "references/majiro-py/known_hashes.json",
+      "sha256": "dbe3f95d19a7601d4e557b470120c239c85db8110b2a5830889c4a26ac46c440",
+      "bytes": 45366,
+      "url": "https://raw.githubusercontent.com/trigger-segfault/majiro-py/f7ec450d5b78f0ed6df603b8c0b0ed79748d9cee/data/known_hashes_compact.json"
+    },
+    {
+      "file": "references/majiro-py/LICENSE",
+      "sha256": "ac440a701ba915f9d45800439ef089b47ef7d812e29e3c4c34a4640c5ac705a8",
+      "bytes": 1070,
+      "url": "https://raw.githubusercontent.com/trigger-segfault/majiro-py/f7ec450d5b78f0ed6df603b8c0b0ed79748d9cee/LICENSE"
+    },
+    {
+      "file": "references/majiro-py/README.md",
+      "sha256": "84679ab7980c969ee1865496e89c1392e1699b07ab19c802d4e2d70d177a180e",
+      "bytes": 1986,
+      "url": "https://raw.githubusercontent.com/trigger-segfault/majiro-py/f7ec450d5b78f0ed6df603b8c0b0ed79748d9cee/README.md"
+    }
+  ]
+}

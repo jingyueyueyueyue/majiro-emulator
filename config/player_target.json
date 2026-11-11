@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "primary_platform": "android",
+  "primary_abi": "arm64-v8a",
+  "minimum_android_api": 26,
+  "target_android_api": 36,
+  "pc_role": "debug_and_original_executable_comparison",
+  "form_factors": ["phone", "tablet"],
+  "requirements": {
+    "logical_resolution": "read_from_game_environment",
+    "display_fit": "preserve_aspect_ratio",
+    "safe_area": "exclude_system_bars_and_display_cutouts",
+    "input_modes": ["direct_touch", "virtual_mouse"],
+    "lifecycle": ["background_resume", "surface_recreation", "process_restart_restore"],
+    "storage": "android_document_tree_and_seekable_file_descriptors",
+    "original_save_import": true,
+    "existing_translation_patches": true
+  },
+  "validation": {
+    "phone": "pending",
+    "tablet": "pending",
+    "game_execution": "not_implemented",
+    "release_allowed": false
+  }
+}

@@ -1,0 +1,32 @@
+<?xml version='1.0' encoding='utf-8'?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" android:compileSdkVersion="36" android:compileSdkVersionCodename="16" package="org.majiro.player" platformBuildVersionCode="36" platformBuildVersionName="16" android:versionName="0.1" android:versionCode="11">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="36" /><uses-permission android:name="android.permission.SET_WALLPAPER" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <queries>
+        <package android:name="org.majiro.discchecker" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="http" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="content" />
+        </intent>
+    </queries>
+    <instrumentation android:functionalTest="true" android:name=".CoreInstrumentation" android:targetPackage="org.majiro.player" />
+    <instrumentation android:functionalTest="true" android:name=".RenderInstrumentation" android:targetPackage="org.majiro.player" />
+    <application android:allowBackup="false" android:debuggable="true" android:icon="@drawable/majiro_game_icon" android:label="Majiro 模拟器" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:usesCleartextTraffic="true">
+        <activity android:configChanges="orientation|screenSize" android:exported="true" android:name=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity android:configChanges="orientation|screenSize" android:exported="false" android:name=".SettingsActivity" />
+        <activity android:configChanges="density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode" android:exported="false" android:launchMode="singleTop" android:name=".GameActivity" android:process=":game" android:screenOrientation="sensorLandscape" />
+    </application>
+</manifest>

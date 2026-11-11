@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "kind": "independent_majiro_player",
+  "final_platform": "android-arm64",
+  "windows_role": "format_and_original_behavior_debug_only",
+  "runtime_source": "player/runtime",
+  "pixel_source": "player/native",
+  "instruction_tables": "player/tables",
+  "core_source": "player/core",
+  "platform_source": "player/android",
+  "artifacts": "resources/player",
+  "legacy_port": {
+    "runtime": "runtime",
+    "project": "projects/windows",
+    "pixel_artifacts": "resources/native",
+    "runtime_or_build_dependency": false,
+    "automatic_synchronization": false
+  },
+  "shared_inputs": [
+    "read-only original game resources",
+    "executable behavior and format research",
+    "analysis scripts, evidence and version fingerprints"
+  ],
+  "acceptance": {
+    "entry_registration_is_not_semantic_verification": true,
+    "full_gameplay_complete": false,
+    "original_save_resume_verified": false,
+    "release_allowed": false
+  }
+}

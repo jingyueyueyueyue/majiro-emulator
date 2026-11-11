@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "source_root": ".",
+  "platforms": ["windows", "android"],
+  "logical_size": [1280, 720],
+  "windows_engine": "projects/windows/Ruri_Artemis.exe",
+  "font_source": "resources/font/SourceHanSansSC-Regular.otf",
+  "archive_order": "reverse_filename",
+  "archive_order_evidence": "MajiroTools documentation; original executable verification pending",
+  "script_archive": "scenario.arc",
+  "entry_script": "start.mjo",
+  "minimum_free_bytes": 1073741824,
+  "copy_fallback": false,
+  "upscale": false,
+  "gameplay_status": "not_playable"
+}

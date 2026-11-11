@@ -1,0 +1,543 @@
+{
+  "schema": 1,
+  "source": "original x86 executions; analysis only, never an execution whitelist",
+  "executables": {
+    "453c3df138b008fd6bed8fbffc2ad2f341bf30b4d8e6d25bb3bf6a287e3cd938": {
+      "numeric": "x87",
+      "minmax_arguments": 2,
+      "string_case": "cp932",
+      "string_crt_initialization": "original_setmbcp(932)",
+      "integer_parse": "wrap32",
+      "empty_search_absent": true,
+      "case_string_relations": false,
+      "ultra_disable_returns_previous": null,
+      "ultra_fast_mode_available": false,
+      "text_controls": {
+        "legacy_font_defaults": true,
+        "overlay_saves_style": false,
+        "overlay_suppresses_message": false,
+        "message_first_line_only": true,
+        "uppercase_pause_event": false
+      },
+      "voice_controls": {
+        "marker": "none",
+        "force_overrides_skip": false
+      },
+      "screen_controls": {
+        "coordinate_mode": "identity",
+        "home_direction": -1,
+        "home_modulo": true,
+        "home_affects_input": false
+      },
+      "graphics_controls": {
+        "mulcopy_available": false
+      },
+      "dialog_controls": {
+        "reset_playback_modes": false,
+        "reset_error_playback_modes": false
+      }
+    },
+    "37a6922539408d46fa0a9d1d90ffdbfb9bca872a2af658b48c1109cd76850b4a": {
+      "numeric": "x87",
+      "minmax_arguments": 2,
+      "string_case": "cp932",
+      "string_crt_initialization": "original_setmbcp(932)",
+      "integer_parse": "wrap32",
+      "empty_search_absent": true,
+      "case_string_relations": false,
+      "ultra_disable_returns_previous": false,
+      "ultra_fast_mode_available": true,
+      "text_controls": {
+        "legacy_font_defaults": true,
+        "overlay_saves_style": false,
+        "overlay_suppresses_message": false,
+        "message_first_line_only": true,
+        "uppercase_pause_event": false
+      },
+      "voice_controls": {
+        "marker": "none",
+        "force_overrides_skip": false
+      },
+      "screen_controls": {
+        "coordinate_mode": "identity",
+        "home_direction": -1,
+        "home_modulo": true,
+        "home_affects_input": false
+      },
+      "graphics_controls": {
+        "optional_mulcopy_coordinates": false
+      },
+      "dialog_controls": {
+        "reset_playback_modes": false,
+        "reset_error_playback_modes": false
+      }
+    },
+    "f95d81f6df7f6ec84ba8a0994d7c4e1db6502f6cf6a0bce4c0cd01107738ff21": {
+      "numeric": "x87",
+      "minmax_arguments": 2,
+      "string_case": "cp932",
+      "string_crt_initialization": "original_setmbcp(932)",
+      "integer_parse": "wrap32",
+      "empty_search_absent": true,
+      "case_string_relations": false,
+      "ultra_disable_returns_previous": true,
+      "ultra_fast_mode_available": true,
+      "text_controls": {
+        "legacy_font_defaults": true,
+        "overlay_saves_style": false,
+        "overlay_suppresses_message": false,
+        "message_first_line_only": true,
+        "uppercase_pause_event": false
+      },
+      "voice_controls": {
+        "marker": "none",
+        "force_overrides_skip": false
+      },
+      "screen_controls": {
+        "coordinate_mode": "fixed1000",
+        "home_direction": -1,
+        "home_modulo": false,
+        "home_affects_input": true
+      },
+      "graphics_controls": {
+        "optional_mulcopy_coordinates": false
+      },
+      "dialog_controls": {
+        "reset_playback_modes": false,
+        "reset_error_playback_modes": false
+      }
+    },
+    "139d1559bd83da7fa54cc8c4d30ccd45401bfba5e542c4762a5cf0e1e3b539a0": {
+      "numeric": "sse32",
+      "minmax_arguments": 0,
+      "string_case": "cp932",
+      "string_crt_initialization": "original_encoded_api_init; original_initptd; original_setmbcp(932)",
+      "integer_parse": "saturate32",
+      "empty_search_absent": false,
+      "case_string_relations": true,
+      "ultra_disable_returns_previous": true,
+      "ultra_fast_mode_available": true,
+      "text_controls": {
+        "legacy_font_defaults": false,
+        "overlay_saves_style": true,
+        "overlay_suppresses_message": true,
+        "message_first_line_only": false,
+        "uppercase_pause_event": true
+      },
+      "voice_controls": {
+        "marker": "exact",
+        "force_overrides_skip": true
+      },
+      "screen_controls": {
+        "coordinate_mode": "double",
+        "home_direction": 1,
+        "home_modulo": false,
+        "home_affects_input": true
+      },
+      "graphics_controls": {
+        "optional_mulcopy_coordinates": true
+      },
+      "dialog_controls": {
+        "reset_playback_modes": true,
+        "reset_error_playback_modes": true
+      }
+    },
+    "844bc4e66f1f11c70ae820a8f8a633c7126fa4884dd7c355c2f50ba07968f0bd": {
+      "numeric": "x87",
+      "minmax_arguments": 2,
+      "string_case": "cp932",
+      "string_crt_initialization": "original_setmbcp(932)",
+      "integer_parse": "wrap32",
+      "empty_search_absent": true,
+      "case_string_relations": false,
+      "ultra_disable_returns_previous": true,
+      "ultra_fast_mode_available": true,
+      "text_controls": {
+        "legacy_font_defaults": true,
+        "overlay_saves_style": false,
+        "overlay_suppresses_message": true,
+        "message_first_line_only": true,
+        "uppercase_pause_event": false
+      },
+      "voice_controls": {
+        "marker": "exact",
+        "force_overrides_skip": false
+      },
+      "screen_controls": {
+        "coordinate_mode": "fixed1000",
+        "home_direction": -1,
+        "home_modulo": false,
+        "home_affects_input": true
+      },
+      "graphics_controls": {
+        "optional_mulcopy_coordinates": false
+      },
+      "dialog_controls": {
+        "reset_playback_modes": false,
+        "reset_error_playback_modes": true
+      }
+    },
+    "2bec58f9fd7f924b5ca403d894ec609a265a57efdfca25397f95a5752b3fcd46": {
+      "numeric": "sse32",
+      "minmax_arguments": 0,
+      "string_case": "latin_fullwidth",
+      "string_crt_initialization": "not_needed_by_recovered_build",
+      "integer_parse": "saturate32",
+      "empty_search_absent": false,
+      "case_string_relations": true,
+      "ultra_disable_returns_previous": true,
+      "ultra_fast_mode_available": true,
+      "text_controls": {
+        "legacy_font_defaults": false,
+        "overlay_saves_style": true,
+        "overlay_suppresses_message": true,
+        "message_first_line_only": false,
+        "uppercase_pause_event": true
+      },
+      "voice_controls": {
+        "marker": "exact",
+        "force_overrides_skip": true
+      },
+      "screen_controls": {
+        "coordinate_mode": "double",
+        "home_direction": 1,
+        "home_modulo": false,
+        "home_affects_input": true
+      },
+      "graphics_controls": {
+        "optional_mulcopy_coordinates": true
+      },
+      "dialog_controls": {
+        "reset_playback_modes": true,
+        "reset_error_playback_modes": true
+      }
+    },
+    "cd1c38ac20d9e502fbc58b7392ca77ec32e3d56f90d988580a3cf58cb6f95146": {
+      "numeric": "x87",
+      "minmax_arguments": 2,
+      "string_case": "cp932",
+      "string_crt_initialization": "original_setmbcp(932)",
+      "integer_parse": "wrap32",
+      "empty_search_absent": true,
+      "case_string_relations": false,
+      "ultra_disable_returns_previous": null,
+      "ultra_fast_mode_available": false,
+      "text_controls": {
+        "legacy_font_defaults": true,
+        "overlay_saves_style": false,
+        "overlay_suppresses_message": false,
+        "message_first_line_only": true,
+        "uppercase_pause_event": false
+      },
+      "voice_controls": {
+        "marker": "none",
+        "force_overrides_skip": false
+      },
+      "screen_controls": {
+        "coordinate_mode": "identity",
+        "home_direction": -1,
+        "home_modulo": true,
+        "home_affects_input": false
+      },
+      "graphics_controls": {
+        "mulcopy_available": false
+      },
+      "dialog_controls": {
+        "reset_playback_modes": false,
+        "reset_error_playback_modes": false
+      }
+    },
+    "f505cc091560b22b1636f1849fd3220a2bb6c5e756303aa2ff89bc940c6be4cd": {
+      "numeric": "x87",
+      "minmax_arguments": 0,
+      "string_case": "cp932",
+      "string_crt_initialization": "original_setmbcp(932)",
+      "integer_parse": "wrap32",
+      "empty_search_absent": true,
+      "case_string_relations": true,
+      "ultra_disable_returns_previous": true,
+      "ultra_fast_mode_available": true,
+      "text_controls": {
+        "legacy_font_defaults": true,
+        "overlay_saves_style": true,
+        "overlay_suppresses_message": true,
+        "message_first_line_only": true,
+        "uppercase_pause_event": false
+      },
+      "voice_controls": {
+        "marker": "exact",
+        "force_overrides_skip": true
+      },
+      "screen_controls": {
+        "coordinate_mode": "fixed1000",
+        "home_direction": -1,
+        "home_modulo": false,
+        "home_affects_input": true
+      },
+      "graphics_controls": {
+        "optional_mulcopy_coordinates": true
+      },
+      "dialog_controls": {
+        "reset_playback_modes": true,
+        "reset_error_playback_modes": true
+      }
+    },
+    "c20b805beafcd4a6fce9ecbffbf489dea09a9c66094786f6cad4b50c99a7039c": {
+      "numeric": "x87",
+      "minmax_arguments": 2,
+      "string_case": "cp932",
+      "string_crt_initialization": "original_setmbcp(932)",
+      "integer_parse": "wrap32",
+      "empty_search_absent": true,
+      "case_string_relations": false,
+      "ultra_disable_returns_previous": false,
+      "ultra_fast_mode_available": true,
+      "text_controls": {
+        "legacy_font_defaults": true,
+        "overlay_saves_style": false,
+        "overlay_suppresses_message": false,
+        "message_first_line_only": true,
+        "uppercase_pause_event": false
+      },
+      "voice_controls": {
+        "marker": "none",
+        "force_overrides_skip": false
+      },
+      "screen_controls": {
+        "coordinate_mode": "identity",
+        "home_direction": -1,
+        "home_modulo": true,
+        "home_affects_input": false
+      },
+      "graphics_controls": {
+        "optional_mulcopy_coordinates": false
+      },
+      "dialog_controls": {
+        "reset_playback_modes": false,
+        "reset_error_playback_modes": false
+      }
+    },
+    "33ca175716962f6387523fac3d4c8edc4864b038c7ac3953e7e62b19091fff40": {
+      "numeric": "sse32",
+      "minmax_arguments": 0,
+      "string_case": "latin_fullwidth",
+      "string_crt_initialization": "not_needed_by_recovered_build",
+      "integer_parse": "saturate32",
+      "empty_search_absent": false,
+      "case_string_relations": true,
+      "ultra_disable_returns_previous": true,
+      "ultra_fast_mode_available": true,
+      "text_controls": {
+        "legacy_font_defaults": false,
+        "overlay_saves_style": true,
+        "overlay_suppresses_message": true,
+        "message_first_line_only": false,
+        "uppercase_pause_event": true
+      },
+      "voice_controls": {
+        "marker": "exact",
+        "force_overrides_skip": true
+      },
+      "screen_controls": {
+        "coordinate_mode": "double",
+        "home_direction": 1,
+        "home_modulo": false,
+        "home_affects_input": true
+      },
+      "graphics_controls": {
+        "optional_mulcopy_coordinates": true
+      },
+      "dialog_controls": {
+        "reset_playback_modes": true,
+        "reset_error_playback_modes": true
+      }
+    },
+    "50dc87b740e36c7cb53938826b775ffadc09ac01d01f96cefac62ba83154bb73": {
+      "numeric": "x87",
+      "minmax_arguments": 0,
+      "string_case": "cp932",
+      "string_crt_initialization": "original_setmbcp(932)",
+      "integer_parse": "wrap32",
+      "empty_search_absent": true,
+      "case_string_relations": true,
+      "ultra_disable_returns_previous": true,
+      "ultra_fast_mode_available": true,
+      "text_controls": {
+        "legacy_font_defaults": true,
+        "overlay_saves_style": true,
+        "overlay_suppresses_message": true,
+        "message_first_line_only": true,
+        "uppercase_pause_event": false
+      },
+      "voice_controls": {
+        "marker": "exact",
+        "force_overrides_skip": true
+      },
+      "screen_controls": {
+        "coordinate_mode": "fixed1000",
+        "home_direction": -1,
+        "home_modulo": false,
+        "home_affects_input": true
+      },
+      "graphics_controls": {
+        "optional_mulcopy_coordinates": true
+      },
+      "dialog_controls": {
+        "reset_playback_modes": true,
+        "reset_error_playback_modes": true
+      }
+    },
+    "45c8a1b5ea39a552629e637e4435b9fa9639978f40f3c164a24867c739d70075": {
+      "numeric": "x87",
+      "minmax_arguments": 0,
+      "string_case": "cp932",
+      "string_crt_initialization": "original_setmbcp(932)",
+      "integer_parse": "wrap32",
+      "empty_search_absent": true,
+      "case_string_relations": true,
+      "ultra_disable_returns_previous": true,
+      "ultra_fast_mode_available": true,
+      "text_controls": {
+        "legacy_font_defaults": true,
+        "overlay_saves_style": true,
+        "overlay_suppresses_message": true,
+        "message_first_line_only": true,
+        "uppercase_pause_event": false
+      },
+      "voice_controls": {
+        "marker": "exact",
+        "force_overrides_skip": true
+      },
+      "screen_controls": {
+        "coordinate_mode": "fixed1000",
+        "home_direction": -1,
+        "home_modulo": false,
+        "home_affects_input": true
+      },
+      "graphics_controls": {
+        "optional_mulcopy_coordinates": true
+      },
+      "dialog_controls": {
+        "reset_playback_modes": true,
+        "reset_error_playback_modes": true
+      }
+    },
+    "f687e510f14dcbb2fe467f31b740f10e8baa6ca981ca626d61d0b6b7ee7cc825": {
+      "numeric": "x87",
+      "minmax_arguments": 0,
+      "string_case": "cp932",
+      "string_crt_initialization": "original_setmbcp(932)",
+      "integer_parse": "wrap32",
+      "empty_search_absent": true,
+      "case_string_relations": true,
+      "ultra_disable_returns_previous": true,
+      "ultra_fast_mode_available": true,
+      "text_controls": {
+        "legacy_font_defaults": true,
+        "overlay_saves_style": true,
+        "overlay_suppresses_message": true,
+        "message_first_line_only": true,
+        "uppercase_pause_event": false
+      },
+      "voice_controls": {
+        "marker": "exact",
+        "force_overrides_skip": true
+      },
+      "screen_controls": {
+        "coordinate_mode": "fixed1000",
+        "home_direction": -1,
+        "home_modulo": false,
+        "home_affects_input": true
+      },
+      "graphics_controls": {
+        "optional_mulcopy_coordinates": true
+      },
+      "dialog_controls": {
+        "reset_playback_modes": true,
+        "reset_error_playback_modes": true
+      }
+    },
+    "c573a0901b007c1db2cc96f6277aafe15401352b7c52f4a2bb16b6bc69ce8693": {
+      "numeric": "sse32",
+      "minmax_arguments": 0,
+      "string_case": "latin_fullwidth",
+      "string_crt_initialization": "not_needed_by_recovered_build",
+      "integer_parse": "saturate32",
+      "empty_search_absent": false,
+      "case_string_relations": true,
+      "ultra_disable_returns_previous": true,
+      "ultra_fast_mode_available": true,
+      "text_controls": {
+        "legacy_font_defaults": false,
+        "overlay_saves_style": true,
+        "overlay_suppresses_message": true,
+        "message_first_line_only": false,
+        "uppercase_pause_event": true
+      },
+      "voice_controls": {
+        "marker": "prefix",
+        "force_overrides_skip": true
+      },
+      "screen_controls": {
+        "coordinate_mode": "double",
+        "home_direction": 1,
+        "home_modulo": false,
+        "home_affects_input": true
+      },
+      "graphics_controls": {
+        "optional_mulcopy_coordinates": true
+      },
+      "dialog_controls": {
+        "reset_playback_modes": true,
+        "reset_error_playback_modes": true
+      }
+    },
+    "f85b6f836bf21360c50e997664df5635992a06c3eb8c3fa21ffd51811adfb137": {
+      "numeric": "x87",
+      "minmax_arguments": 0,
+      "string_case": "cp932",
+      "string_crt_initialization": "original_setmbcp(932)",
+      "integer_parse": "wrap32",
+      "empty_search_absent": true,
+      "case_string_relations": true,
+      "ultra_disable_returns_previous": true,
+      "ultra_fast_mode_available": true,
+      "text_controls": {
+        "legacy_font_defaults": true,
+        "overlay_saves_style": true,
+        "overlay_suppresses_message": true,
+        "message_first_line_only": true,
+        "uppercase_pause_event": false
+      },
+      "voice_controls": {
+        "marker": "exact",
+        "force_overrides_skip": true
+      },
+      "screen_controls": {
+        "coordinate_mode": "fixed1000",
+        "home_direction": -1,
+        "home_modulo": false,
+        "home_affects_input": true
+      },
+      "graphics_controls": {
+        "optional_mulcopy_coordinates": true
+      },
+      "dialog_controls": {
+        "reset_playback_modes": true,
+        "reset_error_playback_modes": true
+      }
+    }
+  },
+  "unsupported_fixtures": [
+    {
+      "status": "unsupported_fixture",
+      "sample": "happy_princess",
+      "error": "Invalid memory read (UC_ERR_READ_UNMAPPED)"
+    },
+    {
+      "status": "unsupported_fixture",
+      "sample": "kiraoto",
+      "error": "original double screen converter changed"
+    }
+  ]
+}
