@@ -2,6 +2,8 @@
 from pathlib import Path
 import argparse
 import json
+from itertools import product
+import re
 import socket
 import shlex
 import subprocess
@@ -20,12 +22,13 @@ def main():
     parser.add_argument("--repeats",type=int,default=2)
     parser.add_argument("--seconds",type=int,default=90)
     parser.add_argument("--game",action="append")
+    parser.add_argument("--mode",action="append",choices=("current","original","local"))
     args=parser.parse_args()
     adb=Path(read_json(ROOT/"reports/android_toolchain.json")["sdk"])/"platform-tools/adb.exe"
     base=[str(adb),"-s",args.serial]
     folder=archive_dir("android_library_batch")
     games=read_json(ROOT/"config/recovered_library.json")["games"]
-    games=[g for g in games if not args.game or g["id"]in args.game]
+    games=[g for g in games if g.get("enabled",True)and(not args.game or g["id"]in args.game)]
     def command(*arguments,timeout=30):
         if arguments and arguments[0]=="shell":
             arguments=("shell",shlex.join(arguments[1:]))
@@ -41,26 +44,48 @@ def main():
                 if not part:break
                 data.extend(part)
         return json.loads(data)
+    installed=command("shell","pm","path",PACKAGE).decode("utf8").strip().splitlines()[0].removeprefix("package:")
+    installed_sha256=command("shell","sha256sum",installed).decode("ascii").split()[0]
+    build=read_json(ROOT/"reports/android_probe_build.json")
+    if installed_sha256!=build["sha256"]:raise RuntimeError("tablet APK differs from the current build")
+    modes=args.mode or["current","original"]
     report={"status":"running","timestamp":timestamp(),"application_id":PACKAGE,"cases":[],
+            "apk_sha256":installed_sha256,"version_name":build["version_name"],"version_code":build["version_code"],
+            "modes":modes,"expected_cases":len(games)*len(modes)*args.repeats,
             "real_translation_api_used":False,"original_app_modified":False,
             "scope":"real device cold startup, source wait and CPU/SDL frame statistics; no full route claim",
             "evidence":str(folder.relative_to(ROOT))}
     receipt=ROOT/"reports/android_library_batch.json"
     for repeat in range(args.repeats):
-        for game in games:
+        for mode,game in product(modes,games):
             began=time.monotonic()
-            row={"game":game["id"],"repeat":repeat,"mode":"original","status":"running"}
-            safe=game["id"].replace(" ","_")+"_"+str(repeat)
+            row={"game":game["id"],"repeat":repeat,"mode":mode,"status":"running"}
+            safe=re.sub("[^a-zA-Z0-9_-]","_",game["id"])+"_"+mode+"_"+str(repeat)
             try:
                 command("shell","am","force-stop",PACKAGE)
                 root="primary:Download/MajiroGames/"+game["device_directory"]
-                output=command("shell","am","start","-W","-n",COMPONENT,
-                               "--es","diagnostic_root",root,"--es","diagnostic_mode","original")
+                launch=["shell","am","start","-W","-n",COMPONENT,"--es","diagnostic_root",root]
+                if mode!="current":launch+=["--es","diagnostic_mode",mode]
+                output=command(*launch)
                 (folder/(safe+"_start.txt")).write_bytes(output)
-                last=None;status=None;render=None;stable=0
+                last=None;status=None;render=None;stable=0;last_log=0
                 while time.monotonic()-began<args.seconds:
+                    if time.monotonic()-last_log>=2:
+                        last_log=time.monotonic()
+                        process=subprocess.run([*base,"shell","pidof",PACKAGE+":game"],
+                                               capture_output=True,timeout=5)
+                        pid=process.stdout.decode("ascii").strip()
+                        if pid:
+                            logs=command("logcat","-d","--pid="+pid,"-v","brief","-s",
+                                         "MajiroPlayer:V","AndroidRuntime:E").decode("utf8","replace")
+                            (folder/(safe+"_runtime.txt")).write_text(logs,encoding="utf8")
+                            errors=[line for line in logs.splitlines()if
+                                    re.match(r"E/(MajiroPlayer|AndroidRuntime)",line)or"ERROR: "in line or
+                                    "text-resources: "in line and"Exception"in line]
+                            if errors:raise RuntimeError(errors[-1])
                     try:
                         status=debug("STATUS");render=debug("RENDER_STATS")
+                        if status.get("problem"):raise RuntimeError("VM problem: "+json.dumps(status["problem"],ensure_ascii=True))
                         pixels=render.get("screen_pixels",{})
                         available=pixels.get("available",False)and pixels.get("visible_nonblack_pixels",0)>0
                         frame=json.dumps([f["script"]for f in status.get("frames",[])],sort_keys=True)
@@ -85,10 +110,12 @@ def main():
             row["seconds"]=round(time.monotonic()-began,2)
             report["cases"].append(row)
             write_json(receipt,report);write_json(folder/"report.json",report)
-            print(json.dumps({k:row.get(k)for k in("game","repeat","status","seconds","error")},ensure_ascii=True),flush=True)
+            print(json.dumps({k:row.get(k)for k in("game","mode","repeat","status","seconds","error")},ensure_ascii=True),flush=True)
     report.update(status="complete",timestamp=timestamp())
-    report["failures"]=[{"game":r["game"],"repeat":r["repeat"],"status":r["status"]}
+    report["failures"]=[{"game":r["game"],"mode":r["mode"],"repeat":r["repeat"],"status":r["status"],
+                         "error":r.get("error")}
                         for r in report["cases"]if r["status"]!="passed"]
+    report["status"]="passed"if not report["failures"]else"failed"
     write_json(receipt,report);write_json(folder/"report.json",report)
     return int(bool(report["failures"]))
 

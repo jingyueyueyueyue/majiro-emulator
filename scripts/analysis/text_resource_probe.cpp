@@ -91,6 +91,19 @@ std::string convert(const std::vector<uint8_t>& bytes,const char* from,const cha
     need(WideCharToMultiByte(target,flags,wide.data(),int(wide.size()),result.data(),count,nullptr,usedp)==count&&!used,
         "unmappable fixture text");return result;
 }
+// Keep the exact production storage callback in this fixture. A binary hash
+// must finish through hash(byte[]) before the Java String transport is reached.
+using jstring=void*;
+struct TextTransport {
+    void* CallStaticObjectMethod(void*,void*,void*){throw std::runtime_error("unexpected text storage transport");}
+    void DeleteLocalRef(void*){}
+} text_transport;
+TextTransport* env=&text_transport;
+void* bridge=nullptr;
+void* java_string(const std::string&){throw std::runtime_error("binary hash crossed Java String boundary");}
+void* method(const char*,const char*){throw std::runtime_error("unexpected text storage method");}
+void checked_java(){}
+std::string native_string(void*){throw std::runtime_error("unexpected text storage response");}
 #include "text_loader.inc"
 int guarded(lua_State* state,lua_CFunction callback){
     try{return callback(state);}catch(const std::exception& error){lua_pushstring(state,error.what());}
@@ -115,9 +128,7 @@ int host_decode(lua_State* state){
     }catch(const std::exception& error){lua_pushstring(state,error.what());}return lua_error(state);
 }
 int host_hash(lua_State* state){
-    auto value=argument(state,1);need(value.starts_with("sha256\n"),"fixture storage is hash only");
-    value=value.substr(7);auto digest="OK "+hash({value.begin(),value.end()});
-    lua_pushlstring(state,digest.data(),digest.size());return 1;
+    return guarded(state,storage);
 }
 int host_names(lua_State* state){
     lua_newtable(state);int i=1;for(const auto& name:names){
@@ -156,6 +167,20 @@ int wmain(int argc,wchar_t** argv){
         need(argc==3||argc==4,"usage: text_resource_probe project plan.lua [uncached]");
         if(argc==4)text_bytes.limit=0;
         project=argv[1];lua=luaL_newstate();luaL_openlibs(lua);
+        std::vector<std::string> binary_hash_inputs={"",std::string("\0",1),
+            std::string("a\0b\xff\x81",5),"\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e"};
+        std::string every_byte;
+        for(int value=0;value<256;++value){
+            binary_hash_inputs.emplace_back(1,char(value));every_byte+=char(value);
+        }
+        binary_hash_inputs.push_back(every_byte);
+        for(const auto& raw:binary_hash_inputs){
+            const auto request="sha256\n"+raw;
+            lua_pushlstring(lua,request.data(),request.size());
+            need(storage(lua)==1,"storage hash did not return one value");
+            need(argument(lua,-1)=="OK "+hash({raw.begin(),raw.end()}),"binary storage hash differs from raw bytes");
+            lua_settop(lua,0);
+        }
         std::ifstream file(argv[2],std::ios::binary);std::string plan((std::istreambuf_iterator<char>(file)),{});
         call(plan,1);lua_setglobal(lua,"PLAN");
         call("return PLAN.root,PLAN.mode",2);translation_mode=argument(lua,-1);root=fs::u8path(argument(lua,-2));lua_settop(lua,0);
@@ -258,7 +283,8 @@ int wmain(int argc,wchar_t** argv){
             break;
         }
         need(rejected==2,"stale resource checks failed");
-        std::cout<<"{\"status\":\"passed\",\"scripts\":"<<parsed_scripts<<",\"resources\":"<<text_snapshot.size()
+        std::cout<<"{\"status\":\"passed\",\"binary_hash_cases\":"<<binary_hash_inputs.size()
+          <<",\"scripts\":"<<parsed_scripts<<",\"resources\":"<<text_snapshot.size()
           <<",\"executed_replacements\":"<<executed<<",\"adapter_scripts\":"<<anchors
           <<",\"stale_rejections\":"<<rejected<<",\"identity\":\""<<final_hash
           <<"\",\"io\":{\"loose_bytes\":"<<file_bytes<<",\"archive_bytes\":"<<arc_bytes

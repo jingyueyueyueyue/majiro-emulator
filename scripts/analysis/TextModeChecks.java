@@ -16,9 +16,11 @@ public final class TextModeChecks {
         Resources resources=new Resources();
         PatchManifest empty=PatchManifest.parse("{\"schema\":1,\"font_directory\":\"patches/fonts\"}",true);
         check(TextMode.resolve("auto",empty,resources).equals("original"),"fonts alone are no translation");
+        check(TextMode.resolve("local",empty,resources).equals("original"),"existing local preference with fonts alone uses original");
         PatchManifest images=PatchManifest.parse("{\"schema\":1,\"image_archives\":[\"patches/images.arc\"]}",true);
         resources.files.add("patches/images.arc");
         check(TextMode.resolve("auto",images,resources).equals("original"),"image-only archives do not enable translated scripts");
+        check(TextMode.resolve("local",images,resources).equals("original"),"image-only resources retain original scripts for local preference");
         resources.files.clear();
         PatchManifest patch=PatchManifest.parse("{\"schema\":1,\"archives\":[\"patches/local/archives/update.arc\"],"+
             "\"script_layers\":[{\"directory\":\"patches/local/scripts\",\"kind\":\"source_mjo\"}],"+
@@ -34,8 +36,10 @@ public final class TextModeChecks {
             check(TextMode.resolve(choice,patch,resources).equals(choice),"explicit mode retained");
         resources.directories.clear();
         check(TextMode.resolve("auto",PatchManifest.parse(null,true),resources).equals("original"),"empty legacy locations do not enable translation");
+        check(TextMode.resolve("local",PatchManifest.parse(null,true),resources).equals("original"),"empty legacy local preference uses original");
         resources.files.add("patches/majiro_metadata.lua");
         rejected("auto",PatchManifest.parse(null,true),resources);
+        rejected("local",PatchManifest.parse(null,true),resources);
         check(TextMode.valid("auto")&&!TextMode.valid("unknown"),"preference validation");
         System.out.println("{\"status\":\"passed\",\"checks\":"+checks+"}");
     }

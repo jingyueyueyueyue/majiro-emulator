@@ -788,7 +788,14 @@ int external_save(lua_State* state){
     lua_pushlstring(state,text.data(),text.size());return 1;
 }
 int storage(lua_State* state) {
-    auto input = java_string(argument(state, 1));
+    const auto request=argument(state,1);
+    // Hash requests carry raw bytes, including NUL and invalid UTF-8. Converting
+    // them to a Java String would replace bytes before SHA-256 sees them.
+    if(request.starts_with("sha256\n")){
+        const auto result="OK "+hash(std::vector<uint8_t>(request.begin()+7,request.end()));
+        lua_pushlstring(state,result.data(),result.size());return 1;
+    }
+    auto input = java_string(request);
     auto result = static_cast<jstring>(env->CallStaticObjectMethod(bridge,
         method("storage", "(Ljava/lang/String;)Ljava/lang/String;"), input));
     env->DeleteLocalRef(input); checked_java(); auto text = native_string(result); env->DeleteLocalRef(result);

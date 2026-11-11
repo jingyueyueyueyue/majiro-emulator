@@ -52,6 +52,7 @@ def native_build(formal, folder):
          "std::vector<uint8_t> parse_hex("),
         ("int resource_text(", "int script_file_read("),
         ("int script(lua_State*", "int graphics("),
+        ("int storage(lua_State* state)", "int dialog("),
     ]
     declarations = (
         "void verify_text_resource(const std::string&,const std::vector<uint8_t>&,const majiro::TextSource&);\n"

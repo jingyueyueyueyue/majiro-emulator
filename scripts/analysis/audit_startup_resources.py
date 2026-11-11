@@ -75,9 +75,8 @@ class Startup:
         self.base={};self.resources={};self.loose={};self.archive_rows=[]
         policy=production_text_plans()[str(Path(game["directory"]).resolve())]
         self.local_unavailable=mode=="local"and policy["auto"]!="local"
-        # The legacy 3-mode matrix also exercises auto fallback for games without
-        # a local layer; explicitly record that this is not a successful forced
-        # local launch. Java independently rejects that forced-local request.
+        # Existing local preferences use original scripts when no local layer
+        # exists. Keep that effective mode explicit in the startup evidence.
         self.mode="original"if self.local_unavailable else mode
         selected=next(row for row in policy["modes"]if row["mode"]==self.mode)
         self.manifest=dict(selected["configuration"])

@@ -49,7 +49,7 @@ def main():
              "device_accessed":False,"actual_gameplay_verified":False,
              "scope":"source VM and actual pixel decoding until the first input boundary; online uses a local delayed mock",
              "local_unavailable_auto_fallbacks":sum(bool(row.get("local_unavailable_auto_fallback"))for row in report["games"]),
-             "mode_policy":"production Java plans; unavailable forced local is recorded and auto-original startup is exercised",
+             "mode_policy":"production Java plans; local preference without a text patch uses original scripts",
              "evidence":str(folder.relative_to(ROOT)),"audit_evidence":report["evidence"]}
     summary["budget_retries"]=retries
     write_json(ROOT/"reports/startup_resource_tests.json",summary);write_json(folder/"report.json",summary)

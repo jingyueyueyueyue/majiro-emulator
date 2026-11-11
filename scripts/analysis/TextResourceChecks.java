@@ -46,7 +46,8 @@ public final class TextResourceChecks {
         check(TextMode.resolve("auto",patch,memory).equals("local"),"coherent local first");
         check(TextMode.resolve("original",patch,memory).equals("original"),"explicit original");
         check(TextMode.resolve("online",patch,memory).equals("online"),"explicit online");
-        rejects(()->TextMode.resolve("local",PatchManifest.parse("{\"schema\":1}",true),memory),"no local fallback");
+        check(TextMode.resolve("local",PatchManifest.parse("{\"schema\":1}",true),memory).equals("original"),
+            "existing local preference falls back to original when no local text layer is declared");
         check(TextMode.resolve("auto",PatchManifest.parse("{\"schema\":1}",true),memory).equals("original"),"no patch");
         rejects(()->PatchManifest.parse("{\"schema\":1,\"script_layers\":[{\"directory\":\"patches/x\",\"kind\":\"source_mjo\"}]}",true),
             "unpaired source layer");

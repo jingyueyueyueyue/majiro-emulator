@@ -21,7 +21,6 @@ final class TextMode {
                 ||resources.populated("patches/local/archives");
             for(PatchManifest.Layer layer:patch.layers)found|=resources.populated(layer.directory);
             if(found)throw new IllegalArgumentException("local text resources require patches/manifest.json");
-            if("local".equals(requested))throw new IllegalArgumentException("no verified local text layer");
             return "original";
         }
         boolean available=patch.hasText();
@@ -29,7 +28,6 @@ final class TextMode {
             if(!patch.imageArchives.contains(archive)&&!patch.archiveEncodings.containsKey(archive))
                 throw new IllegalArgumentException("local archive has no declared text encoding: "+archive);
         if(!available){
-            if("local".equals(requested))throw new IllegalArgumentException("no verified local text layer");
             return "original";
         }
         if(!patch.rawMetadata.isEmpty()&&!resources.file(patch.rawMetadata))

@@ -20,7 +20,11 @@
 
 快速盘点运行 `scripts/analysis/inventory_player_entries.py`，结果见根 `reports/player_entry_progress.json/.md`；注册覆盖和桌面差分通过均不能替代 Android 实机全路线验收。游戏素材、译文、签名密钥、个人配置、生成的 `patches/` 数据与测试归档均保留在本地。
 
+发布前安装最终 APK，再运行 `python -B -X utf8 scripts/analysis/test_android_library_batch.py --repeats 1 --mode current --mode original` 检查整库启动。该入口先比对安装包哈希，分别检查保留的用户偏好与原文模式，记录实际 VM 等待、SDL 呈现、非空画面、截图和启动错误；全部通过后才更新发布包。
+
 文本资源现按原文、本地、在线模式选择来源和编码。自动模式只有在声明资源齐全且启动前校验通过后才启用本地层；缺失、冲突或编码未声明时停止，避免静默混层。本地图片 ARC 即使同时列在普通 ARC 中，也只能提供图像。原文和在线共用原始脚本，在线译文只用于显示。
+
+已有“本地汉化”偏好在游戏未声明文本补丁时使用原文，图像或字体单独存在不算文本汉化；声明了不完整或冲突的文本补丁仍会报错。启动校验通过原生字节通道计算 SHA-256，二进制字符表不经过 Java 字符串转换。
 
 现有 schema 1 的原 MJO＋顺序 TXT 适配和 pinned raw/tunnel 补丁继续使用原哈希及锚点，不更改译文。schema 2 增加 `encoded_text`、`archive_encodings`、`resource_hashes`、`metadata_hashes`、`vm_encoding`，明确 CP932、CP936 或 UTF-8；`shared_image_archives` 可明确选择原文／在线共用的图像层。补丁 Lua 仅作为受限字面量表解析，不执行代码。
 
