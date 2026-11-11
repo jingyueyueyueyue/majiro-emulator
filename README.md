@@ -8,6 +8,8 @@
 
 可以使用已有的汉化资源，也可以自行配置在线翻译服务。游戏本体需自行准备。
 
+[下载 0.1 APK（Android ARM64）](https://github.com/jingyueyueyueyue/majiro-emulator/releases/download/v0.1/Majiro-0.1-arm64-v8a.apk)
+
 ## 目前测试过的游戏
 
 - Amber Quartz
