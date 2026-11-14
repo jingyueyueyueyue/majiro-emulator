@@ -78,17 +78,18 @@ public final class ExternalSaveIO {
                 if(request.action.equals("save")){
                     byte[] bytes=request.data.getBytes(StandardCharsets.UTF_8);
                     if(bytes.length>LIMIT)throw new IllegalArgumentException("external save encoded size bound");
+                    synchronized(ExternalSaveIO.class){
+                        if(request.cancelled){finish(request,"CANCEL",null);return;}
+                        // Opening in "wt" can already truncate the destination.
+                        // Once opening begins, finish the publication and report
+                        // its result even if cancellation arrives in the provider.
+                        request.publishing=true;
+                    }
                     try(OutputStream stream=activity.getContentResolver().openOutputStream(uri,"wt")){
                         if(stream==null)throw new IllegalStateException("external save destination unavailable");
-                        synchronized(ExternalSaveIO.class){
-                            // A write already in progress cannot be undone by
-                            // SAF. Keep its ownership until completion and
-                            // report its actual result, not a premature CANCEL.
-                            if(!request.cancelled)request.publishing=true;
-                        }
-                        if(request.publishing){stream.write(bytes);stream.flush();}
+                        stream.write(bytes);stream.flush();
                     }
-                    finish(request,request.publishing?"OK":"CANCEL",null);
+                    finish(request,"OK",null);
                 }else{
                     ByteArrayOutputStream bytes=new ByteArrayOutputStream();
                     try(InputStream stream=activity.getContentResolver().openInputStream(uri)){

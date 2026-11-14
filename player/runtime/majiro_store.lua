@@ -29,7 +29,7 @@ function M.new(codec,host,identity,compatible_identities,policy)
     local parts={}
     for at=1,#data,maximum do
       local chunk=data:sub(at,at+maximum-1);local key=digest(chunk)
-      if not exists(key..'.mjb')then write(key..'.mjb',chunk)end
+      if not exists(key..'.mjb')or read(key..'.mjb')~=chunk then write(key..'.mjb',chunk)end
       parts[#parts+1]=key
     end
     return {bytes=#data,parts=parts}
@@ -54,9 +54,14 @@ function M.new(codec,host,identity,compatible_identities,policy)
     return key
   end
   function store:load_index()
-    if self.loaded_index then return self.loaded_index end
+    if self.loaded_index then return codec.clone(self.loaded_index)end
+    local partition='index_'..identity..'.mjs'
+    if exists(partition)then index_name=partition end
     local root=read(index_name)
-    if not root then return {schema=1,identity=identity,slots={}}end
+    if not root then
+      self.loaded_index={schema=1,identity=identity,slots={}}
+      return codec.clone(self.loaded_index)
+    end
     local descriptor=codec.decode(root)
     local index=codec.decode(self:get(descriptor))
     if index.schema==1 and not self:accepts_identity(index.identity)and policy.partition_foreign then
@@ -68,7 +73,7 @@ function M.new(codec,host,identity,compatible_identities,policy)
       root=read(index_name)
       if not root then
         self.loaded_index={schema=1,identity=identity,slots={}}
-        return self.loaded_index
+        return codec.clone(self.loaded_index)
       end
       descriptor=codec.decode(root);index=codec.decode(self:get(descriptor))
     end
@@ -78,14 +83,15 @@ function M.new(codec,host,identity,compatible_identities,policy)
     -- Normalize the next index publication without rewriting slot objects.
     index.identity=identity
     self.index_object=descriptor
-    self.loaded_index=index
+    self.loaded_index=codec.clone(index)
     return index
   end
+  function store:index_name()return index_name end
   function store:commit(index)
     assert(index.identity==identity,'save source identity mismatch')
     local object=self:put(codec.encode(index))
     write(index_name,codec.encode(object))
-    self.loaded_index=index
+    self.loaded_index=codec.clone(index)
     local old=self.index_object;self.index_object=object
     if old and not policy.partition_foreign then
       local used={}

@@ -30,7 +30,7 @@ STUBS = {
  public volatile int closes;
  public InputStream openInputStream(Uri u){return new ByteArrayInputStream("MJS1".getBytes());}
  public OutputStream openOutputStream(Uri u,String mode)throws Exception{
- writes++;entered.countDown();release.await();return new OutputStream(){
+ writes++;saved.reset();entered.countDown();release.await();return new OutputStream(){
  public void write(int value)throws IOException{saved.write(value);}
  public void write(byte[] value)throws IOException{
  writeEntered.countDown();
@@ -116,8 +116,8 @@ public class DocumentMediaChecks{
  check("OK\nMJS1".equals(answer.get()),"valid next request failed");
  a.request=0;answer.set(null);worker=exchange(a,answer,"load");ready(a);
  ExternalSaveIO.cancel();worker.join(2000);check("CANCEL".equals(answer.get()),"cancel failed");
- // Cancellation after result claiming must keep the slot until the provider
- // returns/closes; no old bytes may be written after CANCEL is delivered.
+ // Opening "wt" already truncates a file. Cancellation during that call must
+ // let publication complete rather than leave an empty exported save.
  Activity cancelled=new Activity();AtomicReference<Object> cancelledAnswer=new AtomicReference<>();
  Thread cancelling=exchange(cancelled,cancelledAnswer,"save");ready(cancelled);
  ExternalSaveIO.result(cancelled,cancelled.request,Activity.RESULT_OK,new Intent("claimed"));
@@ -127,8 +127,8 @@ public class DocumentMediaChecks{
  try{ExternalSaveIO.exchange(new Activity(),"load","");throw new AssertionError("cancelled writer lost slot");}
  catch(IllegalStateException expected){checks++;}
  cancelled.resolver.release.countDown();cancelling.join(2000);
- check("CANCEL".equals(cancelledAnswer.get())&&cancelled.resolver.saved.size()==0
-   &&cancelled.resolver.closes==1,"cancelled writer wrote or retained stream");
+ check("OK".equals(cancelledAnswer.get())&&cancelled.resolver.saved.size()==4
+   &&cancelled.resolver.closes==1,"cancel during open left an empty export or retained stream");
  Activity publishing=new Activity();publishing.resolver.blockingWrite=true;
  publishing.resolver.release.countDown();AtomicReference<Object> publication=new AtomicReference<>();
  Thread published=exchange(publishing,publication,"save");ready(publishing);
@@ -154,7 +154,7 @@ public class DocumentMediaChecks{
  interrupted.resolver.release.countDown();
  long cleanupEnd=System.nanoTime()+TimeUnit.SECONDS.toNanos(2);
  while(interrupted.resolver.closes==0&&System.nanoTime()<cleanupEnd)Thread.sleep(1);
- check(interrupted.resolver.closes==1&&interrupted.resolver.saved.size()==0,"interrupted writer retained bytes or stream");
+ check(interrupted.resolver.closes==1&&interrupted.resolver.saved.size()==4,"interrupted publication left a truncated export or retained stream");
  ParcelFileDescriptor.size=-1;
  try{IjkVideo.open(a,new Uri());throw new AssertionError("unknown size accepted");}catch(java.io.IOException expected){}
  check(ParcelFileDescriptor.opened==ParcelFileDescriptor.closed,"nonseekable descriptor leaked");

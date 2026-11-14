@@ -28,6 +28,7 @@ def main():
     options["modules"]=module;options["now"]=lambda:clock["now"]
     options["set_clock"]=lambda value:clock.update(now=value)
     options["external_save"]=transport;options["graphics"]=pixels;options["audio"]=lambda *args:True
+    options["compatible_save_identity"]=lambda value:value=="d"*64
     options["cp932"]=lambda text:text.encode("cp932")
     system=module("runtime/majiro_syscalls.lua")["new"](options)
     vm=lua.eval("""
@@ -48,6 +49,13 @@ def main():
     call("$do_extload")
     assert vm["globals"][1][123]==456 and not graphics["staged"]
     checks=["external export/import retains checkpoint and source identity"]
+    legacy=codec["decode"](original);legacy["identity"]="d"*64;legacy["packet"]["identity"]="d"*64
+    external["document"]=codec["encode"](legacy)
+    vm["globals"][1][123]=999
+    call("$do_extload")
+    assert vm["globals"][1][123]==456 and not graphics["staged"]
+    checks.append("recognized legacy external save passes VM script/offset validation and normalizes its identity")
+    external["document"]=original
     external["cancel"]=True
     assert call("$do_extsave")==-1 and call("$do_extload")==-1
     assert vm["globals"][1][123]==456

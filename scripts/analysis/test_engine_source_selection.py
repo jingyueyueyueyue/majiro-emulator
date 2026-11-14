@@ -244,6 +244,9 @@ public final class FeatureSourcesChecks {
     # Actual boot/configuration, with only expensive provider constructors captured.
     boot_lua = create_lua()
     stubs = {
+        # Provider capture isolates configuration routing; upgrade recovery has
+        # its own production VM/storage integration suite.
+        "runtime/majiro_save_compatibility.lua": "return {new=function()return {recover=function()return {recovered=0,rejected=0,conflicts=0}end,accepts=function()return false end}end}",
         "runtime/majiro_store.lua": "return {new=function()return {load_index=function()return {}end}end}",
         "runtime/majiro_syscalls.lua": "return {new=function(o)BOOT_OPTIONS=o;return {state={}}end}",
         "runtime/majiro_vm.lua": "return {new=function(o)VM_OPTIONS=o;return {begin=function()end}end}",

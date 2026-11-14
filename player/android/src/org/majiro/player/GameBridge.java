@@ -51,6 +51,8 @@ public final class GameBridge {
     private static final java.util.concurrent.atomic.AtomicInteger gameButtons=
         new java.util.concurrent.atomic.AtomicInteger();
     private static File gameFiles;
+    private static SaveMigration saveMigration;
+    private static String legacySaveIdentity;
     private static volatile String mediaError;
     private static final HashMap<String, HashMap<String, String>> directories =
         new HashMap<String, HashMap<String, String>>();
@@ -114,7 +116,8 @@ public final class GameBridge {
         gameButtons.set(0);
         GameWindowCommands.reset();
         GameTouchKeys.reset();
-        patchManifest=null;textIdentity=null;launchTextMode=TranslationSettings.load(activity).mode;
+        patchManifest=null;textIdentity=null;legacySaveIdentity=null;
+        launchTextMode=TranslationSettings.load(activity).mode;
         if((activity.getApplicationInfo().flags&android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE)!=0) {
             String requestedMode=activity.getIntent().getStringExtra("diagnostic_mode");
             if("original".equals(requestedMode)||"local".equals(requestedMode))launchTextMode=requestedMode;
@@ -175,6 +178,8 @@ public final class GameBridge {
         // online text execute the same Japanese scripts and share their own root.
         gameFiles = new File(context.getFilesDir(), "games/" + identity+(textMode.equals("local")?"":"/original"));
         if (!gameFiles.isDirectory() && !gameFiles.mkdirs()) throw new IllegalStateException("save directory");
+        File companion=new File(context.getFilesDir(),"games/"+identity+(textMode.equals("local")?"/original":""));
+        saveMigration=new SaveMigration(gameFiles,companion);
         DiagnosticLog.write("game","source="+tree+" root="+rootId+" storage="+identity+" requested="+requestedTextMode+" text="+textMode);
     }
     public static void debugLog(String message){DiagnosticLog.write("runtime",message);}
@@ -313,6 +318,24 @@ public final class GameBridge {
         }
         ArrayList<String> base=new ArrayList<String>(children(rootId).keySet());
         java.util.Collections.sort(base,java.util.Collections.reverseOrder());
+        // Reconstruct 0.1's identity from its original registration order.
+        // Duplicate isolation changed which sources are opened in 0.2.
+        ArrayList<String> legacyPaths=new ArrayList<String>(patch.archives);
+        java.util.HashSet<String> legacyImages=new java.util.HashSet<String>();
+        for(String name:patch.imageArchives)if(!legacyPaths.contains(name)){
+            legacyPaths.add(name);legacyImages.add(name);
+        }
+        legacyPaths.addAll(base);
+        legacySaveIdentity=SaveMigration.legacyIdentity(sourceIdentity,legacyPaths,legacyImages,name->{
+            Uri uri=resolve(name);
+            if(uri==null)throw new IllegalArgumentException("legacy archive missing: "+name);
+            try(ParcelFileDescriptor fd=context.getContentResolver().openFileDescriptor(uri,"r")){
+                if(fd==null)throw new IllegalStateException("cannot inspect legacy archive");
+                long bytes=fd.getStatSize();
+                if(bytes<0)bytes=Os.lseek(fd.getFileDescriptor(),0,OsConstants.SEEK_END);
+                return bytes;
+            }
+        });
         java.util.LinkedHashMap<String,String> duplicates=ArchiveLayerPolicy.duplicates(base,localArchives,
             new ArchiveLayerPolicy.Resources(){
                 @Override public long size(String path) throws Exception {
@@ -936,6 +959,19 @@ public final class GameBridge {
         String body = newline < 0 ? "" : request.substring(newline + 1);
         if (head.equals("sha256"))
             return "OK " + hex(MessageDigest.getInstance("SHA-256").digest(body.getBytes(StandardCharsets.UTF_8)));
+        if(head.equals("save_legacy_identity")){
+            if(legacySaveIdentity==null)throw new IllegalStateException("legacy save identity is not initialized");
+            return "OK "+legacySaveIdentity;
+        }
+        if(head.equals("save_legacy_catalog"))return "OK data\n"+saveMigration.catalog();
+        if(head.startsWith("save_legacy_read ")||head.startsWith("save_legacy_copy ")){
+            String[] parts=head.split(" ",-1);
+            if(parts.length!=3)throw new IllegalArgumentException("legacy save request");
+            int root=Integer.parseInt(parts[1]);
+            if(parts[0].equals("save_legacy_copy")){saveMigration.copy(root,parts[2]);return "OK";}
+            byte[] data=saveMigration.read(root,parts[2]);
+            return data==null?"OK absent":"OK data\n"+new String(data,StandardCharsets.UTF_8);
+        }
         int split = head.indexOf(' ');
         String action = split < 0 ? head : head.substring(0, split);
         String name = split < 0 ? "" : head.substring(split + 1);

@@ -84,6 +84,7 @@ SUITES = (
     "test_png_mask_resources",
     "test_page_image_loading",
     "test_save_identity_partitions",
+    "test_save_upgrade",
     "test_startup_resources",
     "test_patch_archive_frames",
     "test_original_png_aliases",

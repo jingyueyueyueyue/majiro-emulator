@@ -38,12 +38,16 @@ def main():
     except Exception as error:assert"different script set"in str(error)
     else:raise AssertionError("strict non-Android store unexpectedly accepted foreign scripts")
     checks.append("strict callers retain the original identity rejection")
-    corrupt=dict(files);files["index.mjs"]="broken"
+    corrupt=dict(files);files["index_"+b+".mjs"]="broken"
     try:store(b)["load_index"](store(b))
     except Exception:pass
     else:raise AssertionError("invalid save data was silently accepted")
     files.clear();files.update(corrupt)
-    checks.append("corrupt index data still fails its integrity/codec checks")
+    checks.append("corrupt active index data still fails its integrity/codec checks")
+    del files["index.mjs"]
+    independent=store(b)
+    assert independent["load_index"](independent)["profile"]["marker"]=="new-progress"
+    checks.append("current partition remains readable when the unrelated old root index is absent")
     folder=archive_dir("save_identity_partitions")
     report={"status":"passed","timestamp":timestamp(),"checks":checks,"device_accessed":False,
             "existing_player_saves_modified":False,"evidence":str(folder.relative_to(ROOT))}

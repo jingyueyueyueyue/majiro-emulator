@@ -31,6 +31,24 @@ local online
 local codec=module('runtime/majiro_codec.lua')
 local store=module('runtime/majiro_store.lua').new(codec,HOST.storage,identity,{},{partition_foreign=true})
 store.path=function(name)return 'save://'..name end
+local compatibility_module=module('runtime/majiro_save_compatibility.lua')
+compatibility_module.log=function(message)
+  if HOST.debug_output then HOST.debug_output(message,'',0)end
+end
+local compatibility=compatibility_module.new(store,HOST.storage,module('runtime/majiro_json.lua'),
+  resources,function(packet,commands)
+    module('runtime/majiro_save.lua').validate_checkpoint(packet,commands)
+    local staging=module('runtime/majiro_vm.lua').new{
+      opcodes=opcodes,loader=function(name)return resources.apply(HOST.script(name))end,
+      syscall=function()error('legacy validation cannot execute a syscall')end,
+      numeric_profile=configuration.numeric_profile,
+      array_3d_legacy_stride=configuration.array_3d_legacy_stride}
+    staging:import_state(codec.clone(packet.vm))
+  end)
+local recovery=compatibility.recover()
+if HOST.debug_output and(recovery.recovered>0 or recovery.rejected>0 or recovery.conflicts>0)then
+  HOST.debug_output('save recovery: '..module('runtime/majiro_json.lua').encode(recovery),'',0)
+end
 local persisted=store:load_index().profile or {}
 if store.foreign_identity and HOST.debug_output then
   HOST.debug_output('Previous script-set save index preserved; using separate current index','',0)
@@ -67,6 +85,7 @@ local options={
   cp932=HOST.cp932,font_face='sans-serif',font_dialog=HOST.font_dialog,
   decode_bytes=HOST.decode_bytes,service=HOST.service,
   screen_mode=HOST.screen_mode,source_identity=identity,
+  compatible_save_identity=compatibility.accepts,
   screen_fit=HOST.screen_fit,
   file_read=HOST.script_file_read,file_write=HOST.script_file_write,
   external_save=HOST.external_save,

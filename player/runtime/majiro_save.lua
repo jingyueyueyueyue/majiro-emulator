@@ -1,5 +1,40 @@
 -- Majiro save-slot metadata and UI access. Pixel resources remain shared.
 local M={}
+local replay_operations={create=true,load=true,load8=true,alpha=true,antidata=true,copy=true,
+  extcopy=true,swap=true,fill=true,extfill=true,mulfill=true,set=true,sepia=true,alphatable=true,
+  text=true,glyphs=true,paste=true,modify=true,thumbnail=true,release=true,drawmode=true,
+  reverse=true,revmulcopy=true,mulcopy=true,overlayfill=true,mosaic=true,
+  thumbrect=true,fuchidori=true,tablecopy=true,smoothframe=true}
+function M.validate_checkpoint(packet,commands)
+  assert(type(packet)=='table'and packet.schema==1 and type(packet.state)=='table'
+    and type(packet.vm)=='table'and type(commands)=='table','invalid checkpoint structure')
+  local function finite(value)
+    return type(value)=='number'and value==value and math.abs(value)<math.huge
+  end
+  assert(finite(packet.clock)and finite(packet.wall_clock or packet.clock),'invalid checkpoint clock')
+  local saved=packet.state
+  for _,key in ipairs{'console','settings','input','media','pages','progress','registry',
+    'preference_bindings'}do
+    assert(type(saved[key])=='table','checkpoint state missing '..key)
+  end
+  for _,key in ipairs{'pictures','read'}do
+    assert(type(saved.progress[key])=='table','checkpoint progress missing '..key)
+  end
+  for _,key in ipairs{'lines','scripts'}do
+    assert(saved.progress[key]==nil or type(saved.progress[key])=='table','invalid checkpoint progress '..key)
+  end
+  assert(type(saved.media.channels)=='table'and finite(saved.media.generation)
+    and saved.media.generation>=0 and saved.media.generation%1==0,'invalid checkpoint media')
+  for channel,spec in pairs(saved.media.channels)do
+    assert(type(channel)=='string'and type(spec)=='table'and spec.id==channel
+      and type(spec.file)=='string'and finite(spec.started)and finite(spec.duration_ms)
+      and spec.duration_ms>=0 and finite(spec.generation),'invalid checkpoint audio channel')
+  end
+  for _,command in ipairs(commands)do
+    assert(type(command)=='string'and #command<60000 and
+      replay_operations[command:match('^(%S+)')],'invalid checkpoint graphics operation')
+  end
+end
 function M.install(define,state,options,providers,graphics)
   local codec=options.modules('runtime/majiro_codec.lua')
   local graphics_checkpoint=options.modules('runtime/majiro_graphics_checkpoint.lua')
@@ -11,6 +46,10 @@ function M.install(define,state,options,providers,graphics)
   local store=options.store
   local index=store and store:load_index()or{schema=1,identity=options.source_identity,slots={}}
   state.save_catalog=index.slots
+  local function publish(candidate)
+    if store then store:commit(candidate)end
+    index=candidate;state.save_catalog=index.slots
+  end
   local checkpoint
   local function key(slot)
     assert(type(slot)=='number'and slot%1==0,'save slot must be integral')
@@ -76,11 +115,6 @@ function M.install(define,state,options,providers,graphics)
     media_providers=true,tiles_actions=true,tiles_analysis=true}
   -- Exactly the replayable mutations recorded by the independent syscall
   -- graphics journal. Transactions and host/platform operations are not data.
-  local replay_operations={create=true,load=true,load8=true,alpha=true,antidata=true,copy=true,
-    extcopy=true,swap=true,fill=true,extfill=true,mulfill=true,set=true,sepia=true,alphatable=true,
-    text=true,glyphs=true,paste=true,modify=true,thumbnail=true,release=true,drawmode=true,
-    reverse=true,revmulcopy=true,mulcopy=true,overlayfill=true,mosaic=true,
-    thumbrect=true,fuchidori=true,tablecopy=true,smoothframe=true}
   local function snapshot(vm,compacted)
     if not compacted then
       state.graphics_journal=graphics_checkpoint.compact(state.graphics_journal,state.pages)
@@ -164,11 +198,12 @@ function M.install(define,state,options,providers,graphics)
     local page=thumbnail_page and state.pages[thumbnail_page]
     local old=index.slots[slot]
     local time=options.wall_time and options.wall_time()or os.date('%Y/%m/%d %H:%M:%S')
-    index.slots[slot]={time=time,info=checkpoint.state.savepoint.label,snapshot=object,
+    local candidate=codec.clone(index)
+    candidate.slots[slot]={time=time,info=checkpoint.state.savepoint.label,snapshot=object,
       graphics=graphic_objects,thumbnail=page and thumbnail or nil,
       thumbnail_width=page and page.width,thumbnail_height=page and page.height}
-    index.profile=profile(vm)
-    store:commit(index);store:collect(old,index)
+    candidate.profile=profile(vm)
+    publish(candidate);store:collect(old,index)
     state.persist_dirty=false;state.last_saved_slot=slot
     return 0
   end
@@ -289,36 +324,6 @@ function M.install(define,state,options,providers,graphics)
     checkpoint=snapshot(vm,compacted)
     return nil,true
   end
-  local function validate_checkpoint(packet,commands)
-    assert(type(packet)=='table'and packet.schema==1 and type(packet.state)=='table'
-      and type(packet.vm)=='table'and type(commands)=='table','invalid checkpoint structure')
-    local function finite(value)
-      return type(value)=='number'and value==value and math.abs(value)<math.huge
-    end
-    assert(finite(packet.clock)and finite(packet.wall_clock or packet.clock),'invalid checkpoint clock')
-    local saved=packet.state
-    for _,key in ipairs{'console','settings','input','media','pages','progress','registry',
-      'preference_bindings'}do
-      assert(type(saved[key])=='table','checkpoint state missing '..key)
-    end
-    for _,key in ipairs{'pictures','read'}do
-      assert(type(saved.progress[key])=='table','checkpoint progress missing '..key)
-    end
-    for _,key in ipairs{'lines','scripts'}do
-      assert(saved.progress[key]==nil or type(saved.progress[key])=='table','invalid checkpoint progress '..key)
-    end
-    assert(type(saved.media.channels)=='table'and finite(saved.media.generation)
-      and saved.media.generation>=0 and saved.media.generation%1==0,'invalid checkpoint media')
-    for channel,spec in pairs(saved.media.channels)do
-      assert(type(channel)=='string'and type(spec)=='table'and spec.id==channel
-        and type(spec.file)=='string'and finite(spec.started)and finite(spec.duration_ms)
-        and spec.duration_ms>=0 and finite(spec.generation),'invalid checkpoint audio channel')
-    end
-    for _,command in ipairs(commands)do
-      assert(type(command)=='string'and #command<60000 and
-        replay_operations[command:match('^(%S+)')],'invalid checkpoint graphics operation')
-    end
-  end
   local function undo_tables(...)
     -- Snapshot entries, retaining every original table identity and function.
     -- Codec clones would lose provider closures and aliases shared with frames.
@@ -341,7 +346,7 @@ function M.install(define,state,options,providers,graphics)
   local function staged_restore(vm,packet,commands,persistent)
     assert(not vm.modal_dialog and not vm.external_checker,'load owner request is pending')
     assert(options.set_clock,'checkpoint clock restore is unavailable')
-    validate_checkpoint(packet,commands)
+    M.validate_checkpoint(packet,commands)
     local compacted=graphics_checkpoint.compact(commands,packet.state.pages)
     -- Stage private script copies so the live loader cannot change or fail
     -- between validation and committing the graphics/state transaction.
@@ -458,7 +463,8 @@ function M.install(define,state,options,providers,graphics)
     local exported=codec.decode(encoded)
     assert(exported.format=='MajiroPlayerExternalSave'and exported.schema==1,
       'external document is not a portable player save; native Windows import is separate')
-    assert(exported.identity==options.source_identity and exported.packet.identity==options.source_identity,
+    assert(exported.packet.identity==exported.identity and(exported.identity==options.source_identity
+      or(options.compatible_save_identity and options.compatible_save_identity(exported.identity))),
       'external save script identity changed')
     local packet,commands=exported.packet,exported.graphics
     assert(packet.schema==1 and type(packet.state)=='table'and type(packet.state.pages)=='table'
@@ -473,26 +479,30 @@ function M.install(define,state,options,providers,graphics)
       assert(not command:find('save://',1,true)and not command:find('..',1,true),
         'external checkpoint references an unsafe path')
     end
+    packet.identity=options.source_identity
     return staged_restore(vm,packet,commands)
   end)
   define('$set_save_info',function(vm,args)
     assert(#args==2 and type(args[2])=='string')
-    local saved=index.slots[key(args[1])]
+    local candidate=codec.clone(index)
+    local saved=candidate.slots[key(args[1])]
     if not saved then return -1 end
-    saved.info=args[2];if store then store:commit(index)end;return 0
+    saved.info=args[2];publish(candidate);return 0
   end)
   define('$delete_save',function(vm,args)
     assert(#args==1 and store)
     local slot=key(args[1]);local old=index.slots[slot]
-    index.slots[slot]=nil;store:commit(index);store:collect(old,index);return 0
+    local candidate=codec.clone(index)
+    candidate.slots[slot]=nil;publish(candidate);store:collect(old,index);return 0
   end)
   define('$copy_save',function(vm,args)
     assert(#args==2 and store)
     local source=index.slots[key(args[1])]
     if not source then return -1 end
     local target=key(args[2]);local old=index.slots[target]
-    index.slots[target]=codec.clone(source)
-    store:commit(index);store:collect(old,index);return 0
+    local candidate=codec.clone(index)
+    candidate.slots[target]=codec.clone(source)
+    publish(candidate);store:collect(old,index);return 0
   end)
   local native_importer
   local native_plans=setmetatable({},{__mode='k'})
@@ -516,7 +526,8 @@ function M.install(define,state,options,providers,graphics)
     end,
     flush=function(vm)
       if not store or not state.persist_dirty then return end
-      index.profile=profile(vm);store:commit(index);state.persist_dirty=false
+      local candidate=codec.clone(index);candidate.profile=profile(vm)
+      publish(candidate);state.persist_dirty=false
     end,
     stats=function()return {checkpoint=checkpoint~=nil,journal=#state.graphics_journal}end}
 end

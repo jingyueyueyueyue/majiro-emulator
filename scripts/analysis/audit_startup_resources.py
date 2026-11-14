@@ -457,6 +457,22 @@ class Startup:
 
     def storage(self,request):
         if request.startswith("sha256\n"):return"OK "+hashlib.sha256(request[7:].encode("utf8")).hexdigest()
+        if request=="save_legacy_identity":
+            value="audit:"+self.game["id"]+"".join(":"+str(archive.path.stat().st_size)
+                for name,archive in self.archive_rows if key(name)not in self.image_only_archives)
+            return"OK "+hashlib.sha256(value.encode()).hexdigest()
+        if request=="save_legacy_catalog":
+            rows=[{"root":0,"name":name}for name in sorted(self.writes)
+                  if name=="index.mjs"or(name.startswith("index_")and name.endswith(".mjs"))]
+            return"OK data\n"+json.dumps(rows)
+        if request.startswith("save_legacy_read "):
+            _,root,name=request.split(" ")
+            assert root=="0"
+            return"OK data\n"+self.writes[name]if name in self.writes else"OK absent"
+        if request.startswith("save_legacy_copy "):
+            _,root,name=request.split(" ")
+            assert root=="0"and name in self.writes
+            return"OK"
         action,_,rest=request.partition(" ");name,_,data=rest.partition("\n")
         if action=="save_read":return"OK data\n"+self.writes[name]if name in self.writes else"OK absent"
         if action=="save_exists":return"OK 1"if name in self.writes else"OK 0"
@@ -529,7 +545,7 @@ class Startup:
             "screen_fit":lambda *args:True,"font_dialog":lambda face,*args:face,"font_filter":lambda *args:None,
             "resize_window":lambda *args:True,"change_cursor":self.cursor,"wallpaper":lambda name,*args:self.image(name)and 0,
             "load_font":lambda name:bool(self.files.get(name)or self.files.get("font/"+name)),
-            "debug_output":lambda text:self.host_events.append({"kind":"script_debug","text":text[:1000]}),
+            "debug_output":lambda text,*args:self.host_events.append({"kind":"script_debug","text":text[:1000]}),
             "cp932":self.cp932,"decode_bytes":lambda raw:raw.encode("utf8").decode("cp932"),
             "script_file_read":lambda name:self.resource_text(name)if key(name)in self.resources else self.writes.get(name),
             "script_file_write":lambda name,text:self.writes.update({name:text}),

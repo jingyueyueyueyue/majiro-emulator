@@ -41,11 +41,12 @@ def run():
     configuration=lua.table_from({"identity":"a"*64,"width":800,"height":600},recursive=True)
     lua.globals()["AUDIT_CONFIGURATION"]=configuration
     paths={"runtime/player_configuration.lua":"return {make=function()return AUDIT_CONFIGURATION end}",
+           "runtime/majiro_save_compatibility.lua":"return {new=function()return {recover=function()return {recovered=0,rejected=0,conflicts=0}end,accepts=function()return false end}end}",
            "scripts/opcodes.lua":"return {}","scripts/syscall_names.lua":"return {}",
            "runtime/majiro_text_resources.lua":player_path("runtime/majiro_text_resources.lua").read_text(encoding="utf8"),
            "runtime/majiro_codec.lua":"return {}",
            "runtime/majiro_store.lua":"return {new=function()return {load_index=function()return {}end}end}"}
-    host["asset_text"]=lambda path:paths[path]
+    host["asset_text"]=lambda path:paths.get(path)or player_path(path).read_text(encoding="utf8")
     host["game_text"]=lambda path:None
     text_events=[]
     host["text_mode"]=lambda:"original"
