@@ -18,9 +18,11 @@
 
 统一构建与回归入口为 `python -B -X utf8 scripts/build/run_emulator_audit.py --build --package`。它先构建同源核心与像素提供器，运行原 EXE 差分、正式 Java/Lua 配置、存档故障注入和宿主契约检查，通过后打包。`--suite` 可只复查指定测试；按上次耗时优先调度长测试，报告同时绑定生产源码与测试源码。
 
+音频存档保留解析后的资源名，读档及音乐出栈时从当前游戏资源重新取得缓存路径；旧存档使用原有 `name`／`loop_name` 兼容恢复。宿主缓存命中前核对文件存在性与长度，音频和私有字体共用内容校验及原子发布。`scripts/analysis/test_media_cache_recovery.py` 已纳入统一验收，覆盖全部音频通道、普通／外部读档、旧存档、循环段、暂停、压栈、替换和失败回滚；Java／C++ 文件检查直接使用生产缓存实现。
+
 快速盘点运行 `scripts/analysis/inventory_player_entries.py`，结果见根 `reports/player_entry_progress.json/.md`；注册覆盖和桌面差分通过均不能替代 Android 实机全路线验收。游戏素材、译文、签名密钥、个人配置、生成的 `patches/` 数据与测试归档均保留在本地。
 
-发布前安装最终 APK，再运行 `python -B -X utf8 scripts/analysis/test_android_library_batch.py --repeats 1 --mode current --mode original` 检查整库启动。该入口先比对安装包哈希，分别检查保留的用户偏好与原文模式，记录实际 VM 等待、SDL 呈现、非空画面、截图和启动错误；全部通过后才更新发布包。
+有设备连接时，发布前安装最终 APK，再运行 `python -B -X utf8 scripts/analysis/test_android_library_batch.py --repeats 1 --mode current --mode original` 检查整库启动。该入口先比对安装包哈希，分别检查保留的用户偏好与原文模式，记录实际 VM 等待、SDL 呈现、非空画面、截图和启动错误；设备验收全部通过后再更新发布包。没有连接设备、按用户要求发布离线验证包时，发布说明必须明确标注本轮未做实机复测，不能沿用旧设备结果作为本轮验收。
 
 文本资源现按原文、本地、在线模式选择来源和编码。自动模式只有在声明资源齐全且启动前校验通过后才启用本地层；缺失、冲突或编码未声明时停止，避免静默混层。本地图片 ARC 即使同时列在普通 ARC 中，也只能提供图像。原文和在线共用原始脚本，在线译文只用于显示。
 

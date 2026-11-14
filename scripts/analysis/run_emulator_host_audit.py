@@ -33,6 +33,7 @@ CASES = [
     "test_host_movie_detach",
     "test_host_load_journal_work",
     "test_host_restore_combinations",
+    "test_media_cache_recovery",
 ]
 
 

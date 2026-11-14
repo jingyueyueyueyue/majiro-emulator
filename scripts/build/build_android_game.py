@@ -17,7 +17,7 @@ def native_inputs():
         paths.update(path for path in (ROOT/base).rglob("*")
                      if path.is_file()and path.suffix in(".cpp",".hpp",".inc",".c",".h"))
     paths.update(ROOT/name for name in(
-        "player/android/game_host.cpp","player/android/render_recovery.hpp","player/native/majiro_pixels.cpp",
+        "player/android/game_host.cpp","player/android/render_recovery.hpp","player/android/media_cache.hpp","player/native/majiro_pixels.cpp",
         "scripts/convert/generate_portable_pixels.py","scripts/build/build_android_game.py",
         "references/majiro-py/opcodes.py","references/player/SDL3/arm64-v8a/libSDL3.so"))
     return {path.relative_to(ROOT).as_posix():sha256(path)for path in sorted(paths)}

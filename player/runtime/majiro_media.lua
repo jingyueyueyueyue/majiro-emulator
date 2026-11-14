@@ -9,6 +9,40 @@ function M.install(define,state,options)
       or(voice_profile.marker=='exact'and name=='##nw##')
   end
   local wall_now=options.wall_now or options.now
+  local function resolve_audio(name)
+    -- Original _splitpath retains the stem before trying WAV/OGG preference.
+    local alias=options.audio_aliases and options.audio_aliases[name:lower()]
+    local base=(alias or name):gsub('\\','/'):match('[^/]+$')or''
+    local stem=base:gsub('%.[^%.]*$',''):lower()
+    for _,extension in ipairs((options.audio_controls or{}).extensions or{'.wav','.ogg'})do
+      local candidate=stem..extension
+      if options.resource_names[candidate]then return candidate end
+    end
+  end
+  local function refresh_audio(vm,spec)
+    -- Cache paths belong to one host session. Old saves retain name/loop_name;
+    -- new saves also retain the exact resolved members, including aliases.
+    local resource=spec.resource or(spec.name and resolve_audio(spec.name))
+    if not resource then
+      if spec.name and options.media_asset then vm:fail('restored audio resource missing: '..spec.name)end
+      return -- Direct-file transports can provide their own durable paths.
+    end
+    if not options.media_asset then vm:fail('audio resource provider missing')end
+    local asset=options.media_asset(resource)
+    if not asset then vm:fail('restored audio resource missing: '..resource)end
+    local loop_resource=spec.loop_resource or(spec.loop_name and resolve_audio(spec.loop_name))
+    local loop_asset
+    if spec.loop_file then
+      if not loop_resource then vm:fail('restored audio loop resource missing: '..(spec.loop_name or''))end
+      loop_asset=options.media_asset(loop_resource)
+      if not loop_asset then vm:fail('restored audio loop resource missing: '..loop_resource)end
+    end
+    spec.resource=resource;spec.file=asset.file;spec.duration_ms=asset.duration_ms
+    if loop_asset then
+      spec.loop_resource=loop_resource;spec.loop_file=loop_asset.file
+      spec.loop_duration_ms=loop_asset.duration_ms
+    end
+  end
   local function host(vm,action,spec)
     if not options.audio then vm:fail('audio host provider missing: '..action) end
     return options.audio(action,spec)
@@ -100,6 +134,7 @@ function M.install(define,state,options)
     end
   end
   media.replay=function(vm,spec)
+    refresh_audio(vm,spec)
     local elapsed=math.max(0,(spec.paused_at or wall_now())-spec.started)
     -- Slot restore preserves current process-wide master settings.
     spec.volume=effective(spec)
@@ -133,8 +168,10 @@ function M.install(define,state,options)
   end)
   define('$music_pop',function(vm,args)
     assert(#args==0)
-    local spec=table.remove(media.music_stack)
+    local spec=media.music_stack[#media.music_stack]
     if spec==nil then vm:fail('music stack underflow')end
+    if spec then refresh_audio(vm,spec)end
+    table.remove(media.music_stack)
     local current=media.channels.music
     if current then host(vm,'stop',current)end
     media.channels.music=spec or nil
@@ -146,18 +183,6 @@ function M.install(define,state,options)
     end
     return 0
   end)
-  local function resolve_audio(name)
-    -- Original 0x46C330 calls _splitpath, retaining only the filename
-    -- stem, then tries the engine's WAV/OGG preference. MUSIC.CFG uses 過去\ prefixes
-    -- for three files which are stored at the archive root.
-    local alias=options.audio_aliases and options.audio_aliases[name:lower()]
-    local base=(alias or name):gsub('\\','/'):match('[^/]+$')or''
-    local stem=base:gsub('%.[^%.]*$',''):lower()
-    for _,extension in ipairs((options.audio_controls or{}).extensions or{'.wav','.ogg'})do
-      local candidate=stem..extension
-      if options.resource_names[candidate]then return candidate end
-    end
-  end
   local function exists(args)
     assert(#args==1);return resolve_audio(args[1])~=nil
   end
@@ -319,12 +344,12 @@ function M.install(define,state,options)
       local loop=args[2]
       if loop==nil then loop=channel=='music' and 1 or 0 end
       if voice then loop=0 end
-      local spec={id=channel,name=args[1],file=asset.file,duration_ms=asset.duration_ms,
+      local spec={id=channel,name=args[1],resource=name,file=asset.file,duration_ms=asset.duration_ms,
         loop=loop~=0,generation=media.generation,started=wall_now(),channel_volume=channel_volume,
         pan=channel_pan}
       if voice then spec.force=(args[2]or 0)~=0 end
       if loop_asset then
-        spec.loop=true;spec.loop_name=loop_name;spec.loop_file=loop_asset.file
+        spec.loop=true;spec.loop_name=loop_name;spec.loop_resource=loop_source;spec.loop_file=loop_asset.file
         spec.loop_duration_ms=loop_asset.duration_ms
       end
       spec.volume=effective(spec)
@@ -359,9 +384,10 @@ function M.install(define,state,options)
     if loop_source and not loop_asset then vm:fail('audio replacement loop resource missing: '..second)end
     local replacement={}
     for key,value in pairs(current)do replacement[key]=value end
-    replacement.name=first;replacement.file=asset.file;replacement.duration_ms=asset.duration_ms
+    replacement.name=first;replacement.resource=source;replacement.file=asset.file;replacement.duration_ms=asset.duration_ms
     replacement.loop=flags~=0;replacement.loop_name=second~=''and second or nil
     replacement.loop_file=loop_asset and loop_asset.file or nil
+    replacement.loop_resource=loop_source
     replacement.loop_duration_ms=loop_asset and loop_asset.duration_ms or nil
     replacement.started=wall_now();replacement.completed_latch=false
     replacement.replace_requested=true;replacement.offset_ms=0

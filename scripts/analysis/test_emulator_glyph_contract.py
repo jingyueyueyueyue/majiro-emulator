@@ -15,6 +15,7 @@ def run():
     folder = ROOT.parent/"archive/2026-11/20261111_emulator_audit_host/glyph_contract"
     folder.mkdir(parents=True, exist_ok=True)
     source = r"""
+package org.majiro.player;
 import java.util.*;import java.io.*;
 public class GameBridge{
  static int fontQualityMode=0;static Typeface customTypeface;
@@ -76,8 +77,9 @@ public class GameBridge{
     file.write_text(source.replace("// METHOD", body), encoding="utf8")
     java = Path(read_json(ROOT/"reports/android_toolchain.json")["java"])/"bin"
     for index, command in enumerate((
-        [str(java/"javac.exe"), "-encoding", "UTF-8", "-d", str(folder), str(file)],
-        [str(java/"java.exe"), "-cp", str(folder), "GameBridge"],
+        [str(java/"javac.exe"), "-encoding", "UTF-8", "-d", str(folder), str(file),
+         str(ROOT/"player/android/src/org/majiro/player/MediaCache.java")],
+        [str(java/"java.exe"), "-cp", str(folder), "org.majiro.player.GameBridge"],
     )):
         result = subprocess.run(command, cwd=folder, capture_output=True, timeout=30)
         (folder/f"20261111_{index}.txt").write_bytes(result.stdout+result.stderr)

@@ -75,9 +75,17 @@ def timestamp():
 
 def archive_dir(label: str) -> Path:
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
-    path = ROOT / "archive" / now.strftime("%Y-%m") / (now.strftime("%Y%m%d_%H%M%S_%f_") + label)
-    path.mkdir(parents=True, exist_ok=False)
-    return path
+    base = ROOT / "archive" / now.strftime("%Y-%m") / (now.strftime("%Y%m%d_%H%M%S_%f_") + label)
+    path, collision = base, 0
+    while True:
+        try:
+            path.mkdir(parents=True, exist_ok=False)
+            return path
+        except FileExistsError:
+            # Windows clocks can give concurrent audit workers the same time.
+            # Keep each worker's evidence separate, including on a retry.
+            collision += 1
+            path = base.with_name(base.name + "_" + str(collision))
 
 
 def lua_string(value: str) -> str:

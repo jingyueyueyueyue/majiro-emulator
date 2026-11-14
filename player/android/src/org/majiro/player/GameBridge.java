@@ -595,9 +595,8 @@ public final class GameBridge {
             try {
                 byte[] bytes = readFile("patches/fonts/SourceHanSansSC-Regular.otf");
                 if (bytes != null) {
-                    File file = new File(context.getCacheDir(), "SourceHanSansSC-Regular.otf");
-                    if (!file.isFile() || file.length() != bytes.length)
-                        try (FileOutputStream output = new FileOutputStream(file)) { output.write(bytes); }
+                    File file = MediaCache.materialize(context.getCacheDir(), "private-fonts",
+                            "SourceHanSansSC-Regular.otf", bytes);
                     customTypeface = Typeface.createFromFile(file);
                 }
             } catch (Exception error) { throw new IllegalStateException("private font load failed", error); }
@@ -877,11 +876,7 @@ public final class GameBridge {
         byte[] bytes = readFile(name);
         if (bytes == null) bytes = readFile("font/" + name);
         if (bytes == null) return false;
-        String identity = hex(MessageDigest.getInstance("SHA-256").digest(bytes));
-        File directory = new File(context.getCacheDir(), "private-fonts");
-        if (!directory.isDirectory() && !directory.mkdirs()) throw new IllegalStateException("font cache directory");
-        File file = new File(directory, identity + ".font");
-        if (!file.isFile()) try (FileOutputStream output = new FileOutputStream(file)) { output.write(bytes); }
+        File file = MediaCache.materialize(context.getCacheDir(), "private-fonts", name + ".font", bytes);
         Typeface loaded = Typeface.createFromFile(file);
         privateTypefaces.put(key(name), loaded);
         java.nio.ByteBuffer sfnt = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN);
@@ -980,13 +975,7 @@ public final class GameBridge {
     }
 
     public static String cacheMedia(String name, byte[] bytes) throws Exception {
-        File directory = new File(context.getCacheDir(), "media");
-        if (!directory.isDirectory() && !directory.mkdirs()) throw new IllegalStateException("media cache");
-        String suffix = name.toLowerCase(Locale.ROOT);
-        suffix = suffix.contains(".") ? suffix.substring(suffix.lastIndexOf('.')) : ".bin";
-        String hash = hex(MessageDigest.getInstance("SHA-256").digest(bytes));
-        File file = new File(directory, hash + suffix);
-        if (!file.isFile()) try (FileOutputStream output = new FileOutputStream(file)) { output.write(bytes); }
+        File file = MediaCache.materialize(context.getCacheDir(), name, bytes);
         mediaFiles.put(file.getAbsolutePath(), file);
         return file.getAbsolutePath();
     }

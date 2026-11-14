@@ -7,6 +7,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include "render_recovery.hpp"
+#include "media_cache.hpp"
 #include <jni.h>
 #include <android/log.h>
 #include <unistd.h>
@@ -62,7 +63,8 @@ std::map<std::string, majiro::Image> image_cache;
 std::map<std::string,bool> png_transparency_cache;
 std::vector<uint8_t> password;
 bool has_password = false;
-std::map<std::string, std::pair<std::string, double>> audio_cache;
+struct CachedAudio { std::string path; double duration; uint64_t bytes; };
+std::map<std::string, CachedAudio> audio_cache;
 int debug_socket = -1;
 struct DebugClient { int descriptor; std::string command; };
 std::vector<DebugClient> debug_clients;
@@ -963,18 +965,21 @@ int font_filter(lua_State* state) {
 int media_asset(lua_State* state) {
     auto name = argument(state, 1);
     auto found = audio_cache.find(key(name));
-    if (found == audio_cache.end()) {
-        auto bytes = byte_array(read_member(name));
+    if (found == audio_cache.end() ||
+        !majiro::android_host::cached_media_file_valid(found->second.path, found->second.bytes)) {
+        auto data = read_member(name);
+        auto bytes = byte_array(data);
         auto filename = java_string(name);
         auto path = static_cast<jstring>(env->CallStaticObjectMethod(
             bridge, method("cacheMedia", "(Ljava/lang/String;[B)Ljava/lang/String;"), filename, bytes));
         env->DeleteLocalRef(bytes); env->DeleteLocalRef(filename); checked_java();
         auto duration = env->CallStaticLongMethod(bridge, method("duration", "(Ljava/lang/String;)J"), path);
         checked_java(); auto cached_path = native_string(path); env->DeleteLocalRef(path);
-        found = audio_cache.emplace(key(name), std::make_pair(cached_path, double(duration))).first;
+        audio_cache[key(name)] = {cached_path, double(duration), uint64_t(data.size())};
+        found = audio_cache.find(key(name));
     }
-    lua_newtable(state); text_field(state, "file", found->second.first);
-    number_field(state, "duration_ms", found->second.second); return 1;
+    lua_newtable(state); text_field(state, "file", found->second.path);
+    number_field(state, "duration_ms", found->second.duration); return 1;
 }
 int audio(lua_State* state) {
     if(argument(state,1)=="frequency"){
