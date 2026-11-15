@@ -1016,6 +1016,38 @@ public final class GameBridge {
         return file.getAbsolutePath();
     }
 
+    public static String cacheMediaFile(String name) throws Exception {
+        Uri uri = resolve(name);
+        if (uri == null) return null;
+        try (InputStream input = context.getContentResolver().openInputStream(uri)) {
+            if (input == null) throw new java.io.IOException("cannot open loose audio: " + name);
+            File file = MediaCache.materialize(context.getCacheDir(), "media", name, input, -1);
+            mediaFiles.put(file.getAbsolutePath(), file);
+            return file.getAbsolutePath();
+        }
+    }
+
+    public static String cacheMediaRegion(String name, int descriptor, long offset, long length) throws Exception {
+        // Duplicate the archive descriptor so closing this extraction cannot
+        // invalidate the VM's archive or move its shared file position.
+        try (ParcelFileDescriptor source = ParcelFileDescriptor.fromFd(descriptor)) {
+            long size = source.getStatSize();
+            if (size >= 0 && (offset < 0 || offset > size || length < 0 || length > size - offset))
+                throw new java.io.IOException("audio member is outside its archive");
+            InputStream input = new MediaSliceInputStream(offset, length, (position, buffer, at, count) -> {
+                for (;;) {
+                    try { return Os.pread(source.getFileDescriptor(), buffer, at, count, position); }
+                    catch (android.system.ErrnoException error) {
+                        if (error.errno != OsConstants.EINTR) throw new java.io.IOException(error);
+                    }
+                }
+            });
+            File file = MediaCache.materialize(context.getCacheDir(), "media", name, input, length);
+            mediaFiles.put(file.getAbsolutePath(), file);
+            return file.getAbsolutePath();
+        }
+    }
+
     public static boolean isMediaCacheValid(String path, long expectedSize) throws Exception {
         return MediaCache.isValid(new File(path), expectedSize);
     }

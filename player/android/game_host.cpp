@@ -1061,15 +1061,25 @@ int media_asset(lua_State* state) {
     if (found == audio_cache.end() ||
         !majiro::android_host::cached_media_file_valid(
             found->second.path, found->second.bytes, verify_content)) {
-        auto data = read_member(name);
-        auto bytes = byte_array(data);
         auto filename = java_string(name);
         auto path = static_cast<jstring>(env->CallStaticObjectMethod(
-            bridge, method("cacheMedia", "(Ljava/lang/String;[B)Ljava/lang/String;"), filename, bytes));
-        env->DeleteLocalRef(bytes); env->DeleteLocalRef(filename); checked_java();
+            bridge, method("cacheMediaFile", "(Ljava/lang/String;)Ljava/lang/String;"), filename));
+        checked_java();
+        if (!path) {
+            auto member = members.find(key(name));
+            need(member != members.end(), "audio resource not found: " + name);
+            const auto& entry = member->second;
+            const auto& source = sources[entry.archive];
+            path = static_cast<jstring>(env->CallStaticObjectMethod(bridge,
+                method("cacheMediaRegion", "(Ljava/lang/String;IJJ)Ljava/lang/String;"),
+                filename, jint(source.descriptor), jlong(entry.member.offset), jlong(entry.member.size)));
+            checked_java();
+        }
+        env->DeleteLocalRef(filename);
         auto duration = env->CallStaticLongMethod(bridge, method("duration", "(Ljava/lang/String;)J"), path);
         checked_java(); auto cached_path = native_string(path); env->DeleteLocalRef(path);
-        audio_cache[key(name)] = {cached_path, double(duration), uint64_t(data.size())};
+        auto size = std::filesystem::file_size(cached_path);
+        audio_cache[key(name)] = {cached_path, double(duration), uint64_t(size)};
         found = audio_cache.find(key(name));
     }
     lua_newtable(state); text_field(state, "file", found->second.path);

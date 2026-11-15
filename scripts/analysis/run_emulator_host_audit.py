@@ -34,6 +34,7 @@ CASES = [
     "test_host_load_journal_work",
     "test_host_restore_combinations",
     "test_media_cache_recovery",
+    "test_streaming_media",
     "test_movie_checkpoint",
     "test_archive_checkpoint",
     "test_save_versions",

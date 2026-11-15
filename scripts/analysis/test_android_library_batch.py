@@ -1,6 +1,7 @@
 """Batch cold-start tests on the recovery app, preserving the original app/saves."""
 from pathlib import Path
 import argparse
+import atexit
 import json
 from itertools import product
 import re
@@ -21,6 +22,10 @@ def main():
     parser.add_argument("--serial",default="ea615a82")
     parser.add_argument("--repeats",type=int,default=2)
     parser.add_argument("--seconds",type=int,default=90)
+    parser.add_argument("--observe-seconds",type=float,default=20,
+                        help="Keep observing after the first input boundary; catch delayed music/animation errors.")
+    parser.add_argument("--pages",type=int,default=0,
+                        help="Use source pointer/key input to enter the story and require this many reading pages.")
     parser.add_argument("--game",action="append")
     parser.add_argument("--mode",action="append",choices=("current","original","local"))
     args=parser.parse_args()
@@ -44,6 +49,18 @@ def main():
                 if not part:break
                 data.extend(part)
         return json.loads(data)
+    # An asleep/locked Activity does not run SDL ticks. Keep this reversible
+    # test condition explicit rather than interpreting it as a game timeout.
+    previous_awake=command("shell","settings","get","global","stay_on_while_plugged_in").decode().strip()
+    write_json(folder/"device_state.json",{"previous_stay_on_while_plugged_in":previous_awake})
+    def restore_awake():
+        setting=["settings","delete","global","stay_on_while_plugged_in"]if previous_awake=="null"else[
+            "settings","put","global","stay_on_while_plugged_in",previous_awake]
+        subprocess.run([*base,"shell",shlex.join(setting)],capture_output=True,timeout=15)
+    atexit.register(restore_awake)
+    command("shell","svc","power","stayon","true")
+    command("shell","input","keyevent","224")
+    command("shell","wm","dismiss-keyguard")
     installed=command("shell","pm","path",PACKAGE).decode("utf8").strip().splitlines()[0].removeprefix("package:")
     installed_sha256=command("shell","sha256sum",installed).decode("ascii").split()[0]
     build=read_json(ROOT/"reports/android_probe_build.json")
@@ -52,8 +69,9 @@ def main():
     report={"status":"running","timestamp":timestamp(),"application_id":PACKAGE,"cases":[],
             "apk_sha256":installed_sha256,"version_name":build["version_name"],"version_code":build["version_code"],
             "modes":modes,"expected_cases":len(games)*len(modes)*args.repeats,
+            "observe_seconds":args.observe_seconds,"required_story_pages":args.pages,
             "real_translation_api_used":False,"original_app_modified":False,
-            "scope":"real device cold startup, source wait and CPU/SDL frame statistics; no full route claim",
+            "scope":"real device cold startup, delayed failures, optional source-input story pages and actual CPU/SDL pixels; no full route claim",
             "evidence":str(folder.relative_to(ROOT))}
     receipt=ROOT/"reports/android_library_batch.json"
     for repeat in range(args.repeats):
@@ -69,6 +87,8 @@ def main():
                 output=command(*launch)
                 (folder/(safe+"_start.txt")).write_bytes(output)
                 last=None;status=None;render=None;stable=0;last_log=0
+                first_boundary=None;first_read=None;last_action=0;selected={};actions=[]
+                row["actions"]=actions;row["story_pages"]=0
                 while time.monotonic()-began<args.seconds:
                     if time.monotonic()-last_log>=2:
                         last_log=time.monotonic()
@@ -92,13 +112,41 @@ def main():
                         at_wait=status.get("ui_waiting")or status.get("reading_wait")
                         if at_wait and available:
                             stable=stable+1 if frame==last else 1
-                            if stable>=4 and time.monotonic()-began>=4 and render.get("presented",0)>0:
+                            if stable>=4 and first_boundary is None:first_boundary=time.monotonic()
+                            generation=status.get("reading_generation",0)
+                            if status.get("reading_wait"):
+                                if first_read is None:first_read=generation
+                                row["story_pages"]=max(row["story_pages"],generation-first_read+1)
+                            if (stable>=4 and first_boundary is not None and
+                                time.monotonic()-first_boundary>=args.observe_seconds and
+                                row["story_pages"]>=args.pages and render.get("presented",0)>0):
                                 row["status"]="passed";break
+                            if args.pages and row["story_pages"]<args.pages and time.monotonic()-last_action>=1.5:
+                                if status.get("reading_wait"):
+                                    debug("KEY 13 1");time.sleep(.08);debug("KEY 13 0")
+                                    actions.append({"kind":"story_enter","generation":generation})
+                                    last_action=time.monotonic()
+                                elif stable>=4:
+                                    areas=status.get("areas")or[]
+                                    areas=[a for a in areas if isinstance(a,dict)and
+                                           a.get("id",0)>0 and a.get("width",0)>0 and a.get("height",0)>0]
+                                    areas.sort(key=lambda a:(a["id"]!=1,a["id"]))
+                                    signature=frame+json.dumps([(a["id"],a["x"],a["y"])for a in areas])
+                                    attempt=selected.get(signature,0)
+                                    if attempt<len(areas):
+                                        area=areas[attempt];selected[signature]=attempt+1
+                                        x=area["x"]+area["width"]/2;y=area["y"]+area["height"]/2
+                                        debug(f"MOVE {x:g} {y:g}");time.sleep(.08);debug(f"CLICK {x:g} {y:g} 1")
+                                        actions.append({"kind":"source_menu","area":area,"frames":frame})
+                                        last_action=time.monotonic()
+                        else:
+                            stable=0
                         last=frame
                     except (OSError,ValueError,ConnectionError):
                         pass
                     time.sleep(.5)
                 row["status"]="passed"if row["status"]=="passed"else"timeout"
+                row["observed_after_first_boundary_seconds"]=round(time.monotonic()-first_boundary,2)if first_boundary is not None else 0
                 row["vm"]=status;row["render"]=render
                 image=command("exec-out","screencap","-p")
                 (folder/(safe+".png")).write_bytes(image)
@@ -107,6 +155,11 @@ def main():
                 # and per-frame statistics for the final visual review.
             except Exception as error:
                 row.update(status="failed",error=str(error))
+                try:
+                    (folder/(safe+"_failed.png")).write_bytes(command("exec-out","screencap","-p"))
+                    row["screenshot"]=str((folder/(safe+"_failed.png")).relative_to(ROOT))
+                except Exception:
+                    pass
             row["seconds"]=round(time.monotonic()-began,2)
             report["cases"].append(row)
             write_json(receipt,report);write_json(folder/"report.json",report)

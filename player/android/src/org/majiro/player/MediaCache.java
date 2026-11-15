@@ -1,9 +1,11 @@
 package org.majiro.player;
 
 import java.io.File;
+import java.io.ByteArrayInputStream;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
@@ -50,27 +52,47 @@ final class MediaCache {
     }
 
     static synchronized File materialize(File cacheRoot, String category, String name, byte[] bytes) throws Exception {
+        return materialize(cacheRoot, category, name, new ByteArrayInputStream(bytes), bytes.length);
+    }
+
+    /** Copy through a fixed buffer; media size is independent of the Java heap. */
+    static synchronized File materialize(File cacheRoot, String category, String name,
+                                        InputStream input, long expectedSize) throws Exception {
+        if (expectedSize < -1) throw new IllegalArgumentException("invalid media size");
         File directory = new File(cacheRoot, category);
         if (!directory.isDirectory() && !directory.mkdirs() && !directory.isDirectory())
             throw new IOException("cannot create media cache: " + directory);
         String suffix = name.toLowerCase(Locale.ROOT);
         suffix = suffix.contains(".") ? suffix.substring(suffix.lastIndexOf('.')) : ".bin";
         if (!suffix.matches("\\.[a-z0-9]{1,8}")) suffix = ".bin";
-        byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
-        String hash = hex(digest);
-        File destination = new File(directory, hash + suffix);
-        if (matches(destination, bytes.length, digest)) return destination;
-        File pending = Files.createTempFile(directory.toPath(), hash + "-", ".writing").toFile();
+        MessageDigest hash = MessageDigest.getInstance("SHA-256");
+        File pending = Files.createTempFile(directory.toPath(), "media-", ".writing").toFile();
         try {
+            long copied = 0;
             try (FileOutputStream output = new FileOutputStream(pending)) {
-                output.write(bytes);
+                byte[] buffer = new byte[65536];
+                int count;
+                while ((count = input.read(buffer)) != -1) {
+                    if (count == 0) throw new IOException("media source made no read progress");
+                    if (count > Long.MAX_VALUE - copied ||
+                        (expectedSize >= 0 && count > expectedSize - copied))
+                        throw new IOException("media source exceeds declared length");
+                    output.write(buffer, 0, count);
+                    hash.update(buffer, 0, count);
+                    copied += count;
+                }
+                if (expectedSize >= 0 && copied != expectedSize)
+                    throw new IOException("media source ended before declared length");
                 output.getFD().sync();
             }
+            byte[] digest = hash.digest();
+            File destination = new File(directory, hex(digest) + suffix);
+            if (matches(destination, copied, digest)) return destination;
             Files.move(pending.toPath(), destination.toPath(),
                     StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            return destination;
         } finally {
             Files.deleteIfExists(pending.toPath());
         }
-        return destination;
     }
 }
