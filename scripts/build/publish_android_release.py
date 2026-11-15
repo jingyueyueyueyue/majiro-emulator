@@ -34,11 +34,13 @@ def main():
         audit=read_json(ROOT/"reports/emulator_audit_validation.json")
         package=read_json(ROOT/"reports/android_probe_build.json")
         previous=read_json(args.previous_report)
+        version_name=package["version_name"]
+        previous_tag=previous["release_url"].rstrip("/").rsplit("/",1)[-1]
         assert audit["status"]=="passed"and audit["source_identity"]==source_identity()
         assert not audit["source_changed_during_validation"]and not audit["test_sources_changed"]
         assert audit.get("apk",{}).get("sha256")==package["sha256"],"APK was not packaged by the validated audit"
         assert package["application_id"]==previous["application_id"]=="org.majiro.player.recovery"
-        assert package["version_name"]=="0.2"and package["version_code"]>previous["version_code"]
+        assert package["version_name"]==version_name and package["version_code"]>previous["version_code"]
         apk=Path(package["apk"]);assert sha256(apk)==package["sha256"]
         assert run("tracked_diff",["git","status","--porcelain","--untracked-files=no"])==""
         commit=run("commit",["git","rev-parse","HEAD"])
@@ -46,8 +48,9 @@ def main():
         refs=dict((line.split("\t")[1],line.split("\t")[0])for line in remote.splitlines())
         assert refs["refs/heads/main"]==commit,"push the validated source commit first"
         assert refs["refs/tags/"+args.tag]==args.expected_tag,"release tag changed since review"
-        release=json.loads(run("previous_release",["gh","api","repos/"+args.repo+"/releases/tags/"+args.tag]))
-        asset=next(value for value in release["assets"]if value["name"]=="Majiro-0.2-arm64-v8a.apk")
+        release=json.loads(run("previous_release",["gh","api","repos/"+args.repo+"/releases/tags/"+previous_tag]))
+        previous_asset_name="Majiro-"+previous["version_name"]+"-arm64-v8a.apk"
+        asset=next(value for value in release["assets"]if value["name"]==previous_asset_name)
         assert asset["digest"]=="sha256:"+previous["apk_sha256"],"published APK changed since review"
         tools=read_json(ROOT/"reports/android_toolchain.json")
         signing=run("signer",[
@@ -57,19 +60,19 @@ def main():
         certificate=re.search(r"Signer #1 certificate SHA-256 digest: ([0-9a-f]+)",signing).group(1)
         assert certificate==previous["signer_sha256"],"update signer changed"
         notes=args.notes.read_text(encoding="utf8")
-        assert notes.startswith("Majiro 0.2\n")and "\n- "in notes
+        assert notes.startswith("Majiro "+version_name+"\n")and "\n- "in notes
         notes_file=folder/"release_notes.md";notes_file.write_text(notes,encoding="utf8",newline="\n")
-        public_apk=folder/"Majiro-0.2-arm64-v8a.apk";shutil.copyfile(apk,public_apk)
+        public_apk=folder/("Majiro-"+version_name+"-arm64-v8a.apk");shutil.copyfile(apk,public_apk)
         checksum=folder/"SHA256SUMS.txt"
         checksum.write_text(package["sha256"]+"  "+public_apk.name+"\n",encoding="ascii",newline="\n")
-        run("tag_local",["git","tag","-f","-a",args.tag,"-m","Majiro 0.2",commit])
+        run("tag_local",["git","tag","-f","-a",args.tag,"-m","Majiro "+version_name,commit])
         run("tag_push",["git","push",
             "--force-with-lease=refs/tags/"+args.tag+":"+args.expected_tag,
             "origin","refs/tags/"+args.tag])
         run("upload",["gh","release","upload",args.tag,str(public_apk),str(checksum),
             "--repo",args.repo,"--clobber"])
         run("notes",["gh","release","edit",args.tag,"--repo",args.repo,
-            "--title","Majiro 0.2","--notes-file",notes_file,"--latest"])
+            "--title","Majiro "+version_name,"--notes-file",notes_file,"--latest"])
         published=json.loads(run("published_release",["gh","api","repos/"+args.repo+"/releases/tags/"+args.tag]))
         assert published["body"].replace("\r\n","\n").strip()==notes.replace("\r\n","\n").strip()
         live_assets={value["name"]:value for value in published["assets"]}

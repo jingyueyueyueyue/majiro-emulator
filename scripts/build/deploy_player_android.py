@@ -86,7 +86,7 @@ def payload(evidence, *, base_only=False):
             manifest_path = source / "patches/manifest.json"
             if manifest_path.exists():
                 declaration = read_json(manifest_path)
-                if declaration.get("schema") != 1:
+                if declaration.get("schema") not in (1, 2):
                     raise ValueError("unknown recovered patch manifest schema: " + game_id)
             for item in source.rglob("*"):
                 if not item.is_file() or item.is_symlink():

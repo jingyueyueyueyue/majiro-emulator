@@ -26,8 +26,13 @@ def main():
                         help="Keep observing after the first input boundary; catch delayed music/animation errors.")
     parser.add_argument("--pages",type=int,default=0,
                         help="Use source pointer/key input to enter the story and require this many reading pages.")
+    parser.add_argument("--min-session-seconds",type=float,default=0,
+                        help="Require a sustained session after reaching the requested reading pages.")
+    parser.add_argument("--report",type=Path,
+                        help="Write a focused run without replacing the whole-library report.")
     parser.add_argument("--game",action="append")
     parser.add_argument("--mode",action="append",choices=("current","original","local"))
+    parser.add_argument("--resume-report",type=Path,help="Reuse passed cases only for the identical installed APK.")
     args=parser.parse_args()
     adb=Path(read_json(ROOT/"reports/android_toolchain.json")["sdk"])/"platform-tools/adb.exe"
     base=[str(adb),"-s",args.serial]
@@ -65,28 +70,83 @@ def main():
     installed_sha256=command("shell","sha256sum",installed).decode("ascii").split()[0]
     build=read_json(ROOT/"reports/android_probe_build.json")
     if installed_sha256!=build["sha256"]:raise RuntimeError("tablet APK differs from the current build")
+    command("shell","am","force-stop",PACKAGE)
+    namespace="test-"+folder.name
+    generated_saves="files/diagnostic-saves/"+namespace
+    guard={"original":"files/games","generated":generated_saves,"namespace":namespace,"status":"preparing"}
+    def private(*args,check=True):
+        result=subprocess.run([*base,"shell",shlex.join(["run-as",PACKAGE,*args])],
+                              capture_output=True,timeout=45)
+        if check and result.returncode:raise RuntimeError(result.stderr.decode("utf8","replace"))
+        return result
+    # A test namespace is selected before GameBridge opens its save store.
+    # No rename of the player's root is needed, including after interruption.
+    private("mkdir","-p",generated_saves)
+    guard["player_root_moved"]=False
+    guard["status"]="isolated"
+    write_json(folder/"save_isolation.json",guard)
+    def restore_saves():
+        if guard["status"]!="isolated":return
+        command("shell","am","force-stop",PACKAGE)
+        guard["status"]="player_saves_restored"
+        write_json(folder/"save_isolation.json",guard)
+        archive=folder/"test_generated_saves.tar"
+        with archive.open("wb")as output:
+            result=subprocess.run([*base,"exec-out","run-as",PACKAGE,"tar","-cf","-",generated_saves],
+                                  stdout=output,stderr=subprocess.PIPE,timeout=45)
+        if result.returncode:raise RuntimeError("test saves preserved on device; archive transfer failed")
+        import tarfile
+        with tarfile.open(archive)as package:
+            assert all(member.name==generated_saves or member.name.startswith(generated_saves+"/")
+                       for member in package.getmembers())
+        # Exact tool-owned test directory only, after the real save root is back
+        # and a readable local archive of generated test files is present.
+        assert generated_saves.startswith("files/diagnostic-saves/test-2026")and".."not in generated_saves
+        private("rm","-rf",generated_saves)
+        guard["status"]="player_saves_restored_and_test_files_archived"
+        write_json(folder/"save_isolation.json",guard)
+    atexit.register(restore_saves)
     modes=args.mode or["current","original"]
+    previous=read_json(args.resume_report)if args.resume_report else {}
+    if previous:
+        if previous.get("apk_sha256")!=installed_sha256:raise RuntimeError("resume APK differs")
+        if previous.get("required_story_pages",0)<args.pages:raise RuntimeError("resume page target is weaker")
+        if previous.get("observe_seconds",0)<args.observe_seconds:raise RuntimeError("resume observation is weaker")
+        if previous.get("minimum_session_seconds",0)<args.min_session_seconds:raise RuntimeError("resume session is weaker")
+    reused={(row["game"],row["mode"],row["repeat"]):row for row in previous.get("cases",[])
+            if row.get("status")=="passed"}
     report={"status":"running","timestamp":timestamp(),"application_id":PACKAGE,"cases":[],
             "apk_sha256":installed_sha256,"version_name":build["version_name"],"version_code":build["version_code"],
             "modes":modes,"expected_cases":len(games)*len(modes)*args.repeats,
             "observe_seconds":args.observe_seconds,"required_story_pages":args.pages,
+            "minimum_session_seconds":args.min_session_seconds,
+            "player_saves_isolated":True,"save_isolation_record":str((folder/"save_isolation.json").relative_to(ROOT)),
             "real_translation_api_used":False,"original_app_modified":False,
             "scope":"real device cold startup, delayed failures, optional source-input story pages and actual CPU/SDL pixels; no full route claim",
             "evidence":str(folder.relative_to(ROOT))}
-    receipt=ROOT/"reports/android_library_batch.json"
+    receipt=args.report or ROOT/"reports/android_library_batch.json"
     for repeat in range(args.repeats):
         for mode,game in product(modes,games):
+            if (game["id"],mode,repeat)in reused:
+                row=dict(reused[(game["id"],mode,repeat)],reused_from=str(args.resume_report))
+                report["cases"].append(row)
+                write_json(receipt,report);write_json(folder/"report.json",report)
+                print(json.dumps({"game":game["id"],"mode":mode,"status":"passed","reused":True}),flush=True)
+                continue
             began=time.monotonic()
             row={"game":game["id"],"repeat":repeat,"mode":mode,"status":"running"}
             safe=re.sub("[^a-zA-Z0-9_-]","_",game["id"])+"_"+mode+"_"+str(repeat)
             try:
                 command("shell","am","force-stop",PACKAGE)
+                log_since=command("shell","date","+%m-%d %H:%M:%S.000").decode("ascii").strip()
                 root="primary:Download/MajiroGames/"+game["device_directory"]
                 launch=["shell","am","start","-W","-n",COMPONENT,"--es","diagnostic_root",root]
+                launch+=["--es","diagnostic_save_namespace",namespace]
                 if mode!="current":launch+=["--es","diagnostic_mode",mode]
                 output=command(*launch)
                 (folder/(safe+"_start.txt")).write_bytes(output)
-                last=None;status=None;render=None;stable=0;last_log=0
+                last=None;status=None;render=None;stable=0;last_log=0;last_memory=0;seen_pid=None
+                row["memory_samples"]=[]
                 first_boundary=None;first_read=None;last_action=0;selected={};actions=[]
                 row["actions"]=actions;row["story_pages"]=0
                 while time.monotonic()-began<args.seconds:
@@ -95,8 +155,22 @@ def main():
                         process=subprocess.run([*base,"shell","pidof",PACKAGE+":game"],
                                                capture_output=True,timeout=5)
                         pid=process.stdout.decode("ascii").strip()
+                        if seen_pid and pid!=seen_pid:
+                            raise RuntimeError("game process exited or restarted during sustained playback")
                         if pid:
-                            logs=command("logcat","-d","--pid="+pid,"-v","brief","-s",
+                            seen_pid=pid
+                            if time.monotonic()-last_memory>=5:
+                                last_memory=time.monotonic()
+                                raw=command("shell","run-as",PACKAGE,"cat","/proc/"+pid+"/status").decode("ascii")
+                                memory={"seconds":round(time.monotonic()-began,2),"pid":int(pid)}
+                                for key in ("VmRSS","VmSize","VmData","VmSwap","Threads"):
+                                    match=re.search(r"^"+key+r":\s+(\d+)",raw,re.M)
+                                    if match:memory[key]=int(match[1])
+                                maps=command("shell","run-as",PACKAGE,"wc","-l","/proc/"+pid+"/maps")
+                                memory["map_count"]=int(maps.split()[0])
+                                row["memory_samples"].append(memory)
+                                write_json(folder/(safe+"_memory.json"),row["memory_samples"])
+                            logs=command("logcat","-d","-T",log_since,"--pid="+pid,"-v","brief","-s",
                                          "MajiroPlayer:V","AndroidRuntime:E").decode("utf8","replace")
                             (folder/(safe+"_runtime.txt")).write_text(logs,encoding="utf8")
                             errors=[line for line in logs.splitlines()if
@@ -119,18 +193,38 @@ def main():
                                 row["story_pages"]=max(row["story_pages"],generation-first_read+1)
                             if (stable>=4 and first_boundary is not None and
                                 time.monotonic()-first_boundary>=args.observe_seconds and
+                                time.monotonic()-began>=args.min_session_seconds and
                                 row["story_pages"]>=args.pages and render.get("presented",0)>0):
                                 row["status"]="passed";break
                             if args.pages and row["story_pages"]<args.pages and time.monotonic()-last_action>=1.5:
                                 if status.get("reading_wait"):
-                                    debug("KEY 13 1");time.sleep(.08);debug("KEY 13 0")
-                                    actions.append({"kind":"story_enter","generation":generation})
+                                    width=pixels.get("width",800);height=pixels.get("height",600)
+                                    # Source console buttons can occupy the bottom
+                                    # of the screen. Pick an interior point outside
+                                    # every active source area before clicking.
+                                    regions=status.get("areas")or[]
+                                    regions=regions if isinstance(regions,list)else[]
+                                    x,y=width*.5,height*.35
+                                    for fx,fy in ((.5,.35),(.5,.5),(.3,.3),(.7,.3),(.5,.65),(.2,.6)):
+                                        candidate=(width*fx,height*fy)
+                                        if not any(a.get("width",0)>0 and a.get("height",0)>0 and
+                                                   a["x"]<=candidate[0]<a["x"]+a["width"]and
+                                                   a["y"]<=candidate[1]<a["y"]+a["height"]for a in regions):
+                                            x,y=candidate;break
+                                    debug(f"MOVE {x:g} {y:g}");time.sleep(.08);debug(f"CLICK {x:g} {y:g} 1")
+                                    actions.append({"kind":"story_click","generation":generation})
                                     last_action=time.monotonic()
                                 elif stable>=4:
+                                    active=(status.get("active_ui_script")or"").lower()
+                                    if first_read is not None and any(name in frame.lower()for name in(
+                                        "loadsave.mjo","config.mjo","history.mjo","cgmode.mjo","music.mjo")):
+                                        debug("CLICK 400 300 2")
+                                        actions.append({"kind":"return_from_menu","frames":frame})
+                                        last_action=time.monotonic();last=frame;continue
                                     areas=status.get("areas")or[]
                                     areas=[a for a in areas if isinstance(a,dict)and
                                            a.get("id",0)>0 and a.get("width",0)>0 and a.get("height",0)>0]
-                                    areas.sort(key=lambda a:(a["id"]!=1,a["id"]))
+                                    areas.sort(key=lambda a:(a["y"],a["x"]))
                                     signature=frame+json.dumps([(a["id"],a["x"],a["y"])for a in areas])
                                     attempt=selected.get(signature,0)
                                     if attempt<len(areas):
@@ -169,6 +263,8 @@ def main():
                          "error":r.get("error")}
                         for r in report["cases"]if r["status"]!="passed"]
     report["status"]="passed"if not report["failures"]else"failed"
+    restore_saves()
+    report["player_saves_restored"]=guard["status"]=="player_saves_restored_and_test_files_archived"
     write_json(receipt,report);write_json(folder/"report.json",report)
     return int(bool(report["failures"]))
 

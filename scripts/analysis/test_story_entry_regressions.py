@@ -128,8 +128,11 @@ def main():
         failures=sum(row["status"]=="failed"for row in report["games"]),
         progressed=sum(row["pages"]>0 for row in report["games"]),
         complete_routes_verified=False)
+    report["incomplete_cases"]=[{key:row.get(key)for key in("game","mode","status","pages")}
+                                for row in report["games"]if row["status"]!="passed"]
+    report["status"]="failed"if report["failures"]else"incomplete"if report["incomplete_cases"]else"passed"
     write_json(ROOT/"reports/story_entry_regressions.json",report);write_json(folder/"report.json",report)
-    return 1 if report["failures"]else 0
+    return int(report["status"]!="passed")
 
 
 if __name__=="__main__":raise SystemExit(main())

@@ -1170,7 +1170,12 @@ function M.new(options)
       if input_boundary and vm.thread_id==1 and providers['$is_fast_mode'](vm,{})~=0 then
         vm:signal('left',true)
       end
-      if input_boundary and state.input.buttons%2==1 and vm:signal('left') then state.input.buttons=state.input.buttons-1 end
+      -- An active source button area owns the left click. A stale text
+      -- advance handler must not consume the same tap before areaevent_check.
+      if input_boundary and not state.ui_waiting and
+          state.input.buttons%2==1 and vm:signal('left') then
+        state.input.buttons=state.input.buttons-1
+      end
       if input_boundary and math.floor(state.input.buttons/2)%2==1 and vm:signal('right') then
         state.input.buttons=state.input.buttons-2
       end

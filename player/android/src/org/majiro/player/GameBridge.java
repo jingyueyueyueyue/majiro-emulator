@@ -176,9 +176,18 @@ public final class GameBridge {
         String textMode=launchTextMode;
         // Existing development saves used the local translation. Original and
         // online text execute the same Japanese scripts and share their own root.
-        gameFiles = new File(context.getFilesDir(), "games/" + identity+(textMode.equals("local")?"":"/original"));
+        String savePrefix="games/";
+        if((activity.getApplicationInfo().flags&android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE)!=0) {
+            String namespace=activity.getIntent().getStringExtra("diagnostic_save_namespace");
+            if(namespace!=null) {
+                if(!namespace.matches("test-[A-Za-z0-9_-]{1,100}"))
+                    throw new IllegalArgumentException("invalid diagnostic save namespace");
+                savePrefix="diagnostic-saves/"+namespace+"/games/";
+            }
+        }
+        gameFiles = new File(context.getFilesDir(), savePrefix + identity+(textMode.equals("local")?"":"/original"));
         if (!gameFiles.isDirectory() && !gameFiles.mkdirs()) throw new IllegalStateException("save directory");
-        File companion=new File(context.getFilesDir(),"games/"+identity+(textMode.equals("local")?"/original":""));
+        File companion=new File(context.getFilesDir(),savePrefix+identity+(textMode.equals("local")?"/original":""));
         saveMigration=new SaveMigration(gameFiles,companion);
         DiagnosticLog.write("game","source="+tree+" root="+rootId+" storage="+identity+" requested="+requestedTextMode+" text="+textMode);
     }
@@ -583,15 +592,7 @@ public final class GameBridge {
     }
 
     public static byte[] convert(byte[] text, String from, String to) throws Exception {
-        Charset source = Charset.forName(from), target = Charset.forName(to);
-        java.nio.charset.CharsetDecoder decoder = source.newDecoder()
-            .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
-            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT);
-        java.nio.charset.CharsetEncoder encoder = target.newEncoder()
-            .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
-            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT);
-        java.nio.ByteBuffer bytes = encoder.encode(decoder.decode(java.nio.ByteBuffer.wrap(text)));
-        byte[] result = new byte[bytes.remaining()]; bytes.get(result); return result;
+        return TextCodec.convert(text, from, to);
     }
 
     public static int[] bitmap(byte[] encoded) {
@@ -1024,6 +1025,10 @@ public final class GameBridge {
             File file = MediaCache.materialize(context.getCacheDir(), "media", name, input, -1);
             mediaFiles.put(file.getAbsolutePath(), file);
             return file.getAbsolutePath();
+        } catch (java.io.FileNotFoundException missingLooseFile) {
+            // A save can outlive a loose media cache entry or a provider-side
+            // file move. Let the native member lookup try the same name in ARC.
+            return null;
         }
     }
 

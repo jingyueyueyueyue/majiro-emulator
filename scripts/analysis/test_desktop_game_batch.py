@@ -182,10 +182,14 @@ def main():
             for row in rows:
                 print(json.dumps({k:row.get(k)for k in("game","mode","status","seconds","error")},ensure_ascii=True),flush=True)
             write_json(folder/"report.json",report);write_json(ROOT/"reports/desktop_game_batch.json",report)
-    report["status"]="complete"
     report["source_changed_during_run"]=before!={p.name:sha256(p)for p in(ROOT/"player/runtime").glob("*.lua")}
+    report["incomplete_cases"]=[{key:row.get(key)for key in("game","mode","status")}
+                              for row in report["cases"]if row["status"]!="passed"]
+    report["status"]=("source_changed"if report["source_changed_during_run"]else
+                      "failed"if any(r["status"]in("failed","worker_failed")for r in report["cases"])else
+                      "incomplete"if report["incomplete_cases"]else"passed")
     write_json(folder/"report.json",report);write_json(ROOT/"reports/desktop_game_batch.json",report)
-    return int(any(r["status"]in("failed","worker_failed")for r in report["cases"])or report["source_changed_during_run"])
+    return int(report["status"]!="passed")
 
 
 if __name__=="__main__":raise SystemExit(main())

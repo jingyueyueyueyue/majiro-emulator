@@ -112,7 +112,11 @@ def worker(game,folder,pages=12):
             def observe_top(vm,args,*rest):
                 value=voice_top(vm,args,*rest)
                 current=session.current_redraw
-                if current is not None:current["voice_top"]=value
+                if current is not None:
+                    current["voice_top"]=value
+                    current["source_voice_layout_globals"]={str(key):vm["globals"][1][key]for key in(
+                        3925127845,3745512456,812635213,600864992,626963003)}
+                    current["source_voice_layout_locals"]=table_value(vm["frame"](vm)["locals"])
                 return value
             providers["$voicerect_top"]=observe_top
             row["source_path"]=open_story_history(session)

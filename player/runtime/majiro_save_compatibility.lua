@@ -49,7 +49,12 @@ function M.new(store,host,json,resources,validate)
           local receipt=store.digest(source.root..'/'..source.name..'\n'..encoded)
           if index.recovered[receipt]then return end
           local old=codec.decode(object(source.root,codec.decode(encoded)))
-          if not api.accepts(old.identity)then return end
+          -- The active root index is the same game's previous local save
+          -- partition. Allow it through the upgrade validator when a text
+          -- patch revision changed its identity; companion roots still need
+          -- an explicitly recognized identity.
+          local same_directory_root=source.root==0 and source.name=='index.mjs'
+          if not api.accepts(old.identity)and not same_directory_root then return end
           assert(old.schema==1 and type(old.slots)=='table','invalid legacy index')
           local candidate=codec.clone(index)
           local imported=0

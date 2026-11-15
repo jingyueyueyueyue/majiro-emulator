@@ -3,18 +3,24 @@
 local function module(path)
   return assert(loadstring(HOST.asset_text(path),path))()
 end
+local function startup_phase(name)
+  if HOST.startup_phase then HOST.startup_phase(name)end
+end
 local mode=HOST.text_mode and HOST.text_mode()or'original'
 local patch_config={raw_metadata='',text_adapter={kind='',path=''}}
 if mode=='local'then
   patch_config=module('runtime/majiro_json.lua').decode(assert(HOST.patch_configuration(),'patch manifest configuration missing'))
 end
 local resources=module('runtime/majiro_text_resources.lua').new(mode,patch_config,HOST,module)
+startup_phase('patch')
 local raw_patch,text_patch=resources.raw,resources.text
 PLAYER_PATCH_METADATA=resources.raw_data
 PLAYER_DECODE_PATCH=raw_patch and raw_patch.decode or nil
 PLAYER_VERIFY_TEXT_RESOURCE=resources.verify
 resources.preflight()
+startup_phase('preflight')
 local configuration=module('runtime/player_configuration.lua').make()
+startup_phase('configuration')
 local opcodes=module('scripts/opcodes.lua')
 local names=module('scripts/syscall_names.lua')
 local identity=resources.identity(configuration.identity)
@@ -46,6 +52,7 @@ local compatibility=compatibility_module.new(store,HOST.storage,module('runtime/
     staging:import_state(codec.clone(packet.vm))
   end)
 local recovery=compatibility.recover()
+startup_phase('save_recovery')
 if HOST.debug_output and(recovery.recovered>0 or recovery.rejected>0 or recovery.conflicts>0)then
   HOST.debug_output('save recovery: '..module('runtime/majiro_json.lua').encode(recovery),'',0)
 end
@@ -203,6 +210,7 @@ options.native_present=function()
   system.presented(system.state.present_requested)
 end
 vm:begin('start.mjo')
+startup_phase('ready')
 function PLAYER_SIZE()return configuration.width,configuration.height end
 function PLAYER_TICK(now,event)
   clock=now
@@ -297,6 +305,7 @@ function PLAYER_STATUS()
     read_positions=state.progress.read,problem=vm.problem,
     translation=online and online.stats or nil,
     last_syscall=vm.last_syscall and{hash=vm.last_syscall.hash,opcode=vm.last_syscall.opcode}or nil,
+    memory_kib=collectgarbage('count'),save_stats=system.saves.stats(),
     frontbuffer=state.frontbuffer,invalidate_depth=state.invalidate_depth,
     invalidation_enabled=state.invalidate,submitted_frames=submitted_frames,last_present_reply=last_present_reply}
 end

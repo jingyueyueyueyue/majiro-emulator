@@ -8,6 +8,7 @@
 #include <SDL3/SDL_main.h>
 #include "render_recovery.hpp"
 #include "media_cache.hpp"
+#include "lua_memory.hpp"
 #include <jni.h>
 #include <android/log.h>
 #include <unistd.h>
@@ -38,6 +39,7 @@ jclass bridge;
 lua_State* lua;
 SDL_Renderer* renderer;
 majiro::android_host::Presentation presentation;
+majiro::android_host::LuaMemory lua_memory;
 std::vector<uint8_t> screen_rgba;
 uint64_t screen_cpu_updates=0,last_render_error_log=0;
 bool render_paused=false;
@@ -45,6 +47,7 @@ std::string application_id;
 std::string json_string(const std::string& text);
 int screen_width, screen_height;
 uint64_t began, clock_adjust;
+uint64_t startup_started=0;
 std::string root_uri;
 std::string translation_mode="original";
 std::string runtime_text_encoding="cp932";
@@ -81,6 +84,14 @@ std::map<int, int> physical_keys;
 bool cursor_warp_pending=false;
 SDL_Cursor* script_cursor=nullptr;
 float cursor_warp_x=0,cursor_warp_y=0;
+
+void draw_startup_splash(SDL_Renderer* target) {
+    int width=0,height=0;
+    if(!SDL_GetRenderOutputSize(target,&width,&height)||width<=0||height<=0)return;
+    SDL_SetRenderDrawColor(target,18,24,31,255);
+    SDL_RenderClear(target);
+    SDL_RenderPresent(target);
+}
 
 void need(bool value, const std::string& why) { if (!value) throw std::runtime_error(why); }
 void checked_java() {
@@ -905,6 +916,12 @@ int debug_output(lua_State* state) {
         text,script,int(luaL_checknumber(state,3)));
     env->DeleteLocalRef(text);env->DeleteLocalRef(script);checked_java();return 0;
 }
+int startup_phase(lua_State* state) {
+    debug("startup phase="+argument(state,1)+" elapsed_ms="+
+          std::to_string(SDL_GetTicks()-startup_started)+
+          " lua_kib="+std::to_string(lua_gc(state,LUA_GCCOUNT,0)));
+    return 0;
+}
 int load_font(lua_State* state) {
     auto name=java_string(argument(state,1));
     bool result=env->CallStaticBooleanMethod(bridge,method("loadFont","(Ljava/lang/String;)Z"),name);
@@ -1222,7 +1239,7 @@ void host_functions() {
     HOST(archive_state);
     HOST(script_file_read);HOST(script_file_write);
     HOST(member_names); HOST(identity); HOST(engine_requirements); HOST(image_metadata); HOST(image_asset); HOST(script);
-    HOST(graphics); HOST(storage);HOST(external_save); HOST(dialog);HOST(platform); HOST(debug_output); HOST(load_font);
+    HOST(graphics); HOST(storage);HOST(external_save); HOST(dialog);HOST(platform); HOST(debug_output);HOST(startup_phase); HOST(load_font);
     HOST(wallpaper); HOST(change_cursor);
     HOST(resize_window);
     HOST(font_filter);
@@ -1304,6 +1321,9 @@ std::string render_stats() {
        <<",\"output_width\":"<<output_width<<",\"output_height\":"<<output_height
        <<",\"window_flags\":"<<(window?uint64_t(SDL_GetWindowFlags(window)):0)
        <<",\"paused\":"<<(render_paused?"true":"false")
+       <<",\"lua_kib\":"<<(lua?lua_gc(lua,LUA_GCCOUNT,0):0)
+       <<",\"lua_collections\":"<<lua_memory.collections
+       <<",\"lua_stack\":"<<(lua?lua_gettop(lua):0)
        <<",\"cpu_updates\":"<<screen_cpu_updates
        <<",\"screen_texture\":"<<(presentation.screen.get()?"true":"false")
        <<",\"screen_dirty\":"<<(presentation.screen.dirty()?"true":"false")
@@ -1469,6 +1489,11 @@ void debug_poll(float& x, float& y, int& buttons, std::vector<int>& pressed) {
         std::string response;
         if(command=="RENDER_STATS"){
             response=render_stats();
+        } else if(command=="COLLECT"){
+            auto before=lua_gc(lua,LUA_GCCOUNT,0);
+            lua_gc(lua,LUA_GCCOLLECT,0);
+            response="{\"before_kib\":"+std::to_string(before)+
+                ",\"after_kib\":"+std::to_string(lua_gc(lua,LUA_GCCOUNT,0))+"}";
         } else if (command == "STATUS") {
             lua_getglobal(lua, "PLAYER_STATUS");
             if (lua_pcall(lua, 0, 1, 0)) throw std::runtime_error(lua_tostring(lua, -1));
@@ -1526,11 +1551,16 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** 
         need(window != nullptr, SDL_GetError());
         renderer = SDL_CreateRenderer(window, nullptr); need(renderer != nullptr, SDL_GetError());
         SDL_SetRenderVSync(renderer, 1);
+        draw_startup_splash(renderer);
+        startup_started=SDL_GetTicks();
         lua = luaL_newstate(); need(lua != nullptr, "Lua allocation failed"); luaL_openlibs(lua);
+        lua_memory.configure(lua);
         initialize_sources(); install_pixels(); host_functions();
+        debug("startup phase=sources elapsed_ms="+std::to_string(SDL_GetTicks()-startup_started));
         began = SDL_GetTicks(); clock_adjust = 0;
         auto boot = java_read("runtime/player_boot.lua", true);
         execute(std::string(boot.begin(), boot.end()), "player_boot", 0);
+        lua_memory.settled(lua,SDL_GetTicks());
         start_debug_server();
         lua_getglobal(lua, "PLAYER_SIZE"); need(lua_pcall(lua, 0, 2, 0) == 0, "game dimensions");
         int logical_w = int(lua_tonumber(lua, -2)), logical_h = int(lua_tonumber(lua, -1)); lua_pop(lua, 2);
@@ -1662,6 +1692,7 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** 
                 debug(message.str()+" render="+render_stats()); last_debug = SDL_GetTicks();
             }
             lua_pop(lua, 4);
+            lua_memory.tick(lua,SDL_GetTicks());
             if(window_command){
                 lua_getglobal(lua,"PLAYER_WINDOW_MENU_RESULT");
                 if(lua_pcall(lua,0,1,0))throw std::runtime_error(lua_tostring(lua,-1));
