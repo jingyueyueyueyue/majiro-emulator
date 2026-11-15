@@ -64,7 +64,9 @@ Java_org_majiro_player_NativeCore_inspectNativeSave(JNIEnv* env, jclass, jint de
             std::vector<uint8_t> signature(size>=16?16:0);
             if (!signature.empty()) read(0,signature.data(),signature.size());
             auto kind=majiro::identify_native_save(signature);
-            report=(kind==majiro::NativeSaveKind::story_103||kind==majiro::NativeSaveKind::story_105)
+            report=(kind==majiro::NativeSaveKind::story_102||kind==majiro::NativeSaveKind::story_103||
+                    kind==majiro::NativeSaveKind::story_104||
+                    kind==majiro::NativeSaveKind::story_105)
                 ? majiro::native_story_save_json(majiro::read_native_story_save(read,static_cast<uint64_t>(size)))
                 : majiro::native_system_save_json(majiro::read_native_system_save(read,static_cast<uint64_t>(size)));
         }

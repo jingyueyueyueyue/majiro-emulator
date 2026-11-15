@@ -18,9 +18,15 @@
 
 统一构建与回归入口为 `python -B -X utf8 scripts/build/run_emulator_audit.py --build --package`。它先构建同源核心与像素提供器，运行原 EXE 差分、正式 Java/Lua 配置、存档故障注入和宿主契约检查，通过后打包。`--suite` 可只复查指定测试；按上次耗时优先调度长测试，报告同时绑定生产源码与测试源码。
 
-音频存档保留解析后的资源名，读档及音乐出栈时从当前游戏资源重新取得缓存路径；旧存档使用原有 `name`／`loop_name` 兼容恢复。宿主缓存命中前核对文件存在性与长度，音频和私有字体共用内容校验及原子发布。`scripts/analysis/test_media_cache_recovery.py` 已纳入统一验收，覆盖全部音频通道、普通／外部读档、旧存档、循环段、暂停、压栈、替换和失败回滚；Java／C++ 文件检查直接使用生产缓存实现。
+音频存档保留解析后的资源名，读档及音乐出栈时从当前游戏资源重新取得缓存路径；旧存档使用原有 `name`／`loop_name` 兼容恢复。宿主缓存命中前核对文件存在性、长度与 SHA-256，音频和私有字体共用内容校验及原子发布。`scripts/analysis/test_media_cache_recovery.py` 已纳入统一验收，覆盖全部音频通道、普通／外部读档、旧存档、循环段、暂停、压栈、替换和失败回滚；Java／C++ 文件检查直接使用生产缓存实现。
 
 快速盘点运行 `scripts/analysis/inventory_player_entries.py`，结果见根 `reports/player_entry_progress.json/.md`；注册覆盖和桌面差分通过均不能替代 Android 实机全路线验收。游戏素材、译文、签名密钥、个人配置、生成的 `patches/` 数据与测试归档均保留在本地。
+
+存档审修入口已归入统一验收：`test_save_versions` 直接执行历史 Git／APK 中的写档代码，验证三个文字模式、本地／外部存档、升级身份迁移、嵌套调用、共享数组及旧音频路径恢复；`test_historical_gameplay_saves` 对恢复包的五个真实槽核对原脚本哈希、实际渲染并继续正文，再保存和读取。原版格式专项覆盖 V1.102／V1.103／V1.104／V1.105，并从全部 17 个原 EXE 盘点格式签名；`test_native_frame_resume` 使用原 EXE 写入器，`test_native_story_resume` 使用真实 V1.104 四层帧存档及配套系统／已读文件。原版导入仍要求明确的脚本版本身份绑定，系统内的旧资源指针还需绑定原脚本的赋值位置与当前重建资源，场景通过原游戏 `HOT_RESET` 重建并在图形事务内完成，失败恢复原场景。
+
+`test_native_string_bytes` 验证全部单字节和双字节输入的无损往返。原版系统存档中的混合编码及重复 CP932 映射使用私用字符保存原始字节，哈希、比较与后续保存仍使用同一字节序列。
+
+影片纹理和原版场景重建后的存档冻结实际页面、调色板、遮罩关联及释放状态，避免重新播放可变影片源导致像素变化。共享页面快照编码在 `core/page_checkpoint.hpp`，Windows／Android 使用同一实现。测试、构建和失败注入证据直接写入日期归档，正式游戏与玩家存档保持原字节。
 
 有设备连接时，运行 `python -B -X utf8 scripts/analysis/test_android_library_batch.py --repeats 1 --mode current --mode original` 检查整库启动。该入口先比对安装包哈希，分别检查保留的用户偏好与原文模式，记录实际 VM 等待、SDL 呈现、非空画面、截图和启动错误。检查结果、执行范围和设备状态记录在本地验收报告。
 

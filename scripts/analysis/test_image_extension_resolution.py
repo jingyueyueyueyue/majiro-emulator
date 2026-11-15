@@ -63,6 +63,25 @@ def main():
         assert f.uc.reg_read(reg.UC_X86_REG_EAX)==(0 if available else 0xffffffff)
         rows.append({"requested":requested,"available":available,"resolved":actual,"probes":attempts,"status":"passed"})
     folder=archive_dir("image_extension_resolution")
+    from audit_player_semantics import registered_providers
+    missing_sample=next(s for s in read_json(ROOT/"reports/opcode_dispatch.json")["samples"]if s["sample"]=="oh_pants")
+    for name,entry in (("$pic_len_x",0x422bd0),("$pic_len_y",0x422d80)):
+        f=FunctionFixture(missing_sample)
+        f.uc.mem_write(0x10020000,bytes(12)+b"BG1010W\0")
+        f.hook(0x425ff0,lambda sp:f.top)
+        f.hook(0x41fcc0,lambda sp:0xffffffff)
+        f.hook(0x410890,lambda sp:1)
+        f.hook(0x426010,lambda sp:setattr(f,"result",f.read(sp+4))or 0)
+        f.call(entry,[0x10020000])
+        lua,_,_,system=registered_providers()
+        vm=lua.table();vm["fail"]=lua.eval("function(self,why)error(why)end")
+        assert system["providers"][name](vm,lua.table_from(["BG1010W"]))==f.result==1
+        rows.append({"query":name,"missing_resource":"BG1010W","native_missing_cancel_result":f.result,
+                     "original_exe_sha256":missing_sample["exe_sha256"],"status":"passed"})
+        lua,_,_,system=registered_providers(overrides={"resource_names":{"broken.rct":True}})
+        vm=lua.table();vm["fail"]=lua.eval("function(self,why)error(why)end")
+        ok,why=lua.eval("function(f,v)return pcall(f,v,{'broken'})end")(system["providers"][name],vm)
+        assert not ok and "existing resource"in str(why)
     report={"timestamp":timestamp(),"status":"passed","cases":rows,"original_exe_sha256":sample["exe_sha256"],
         "original_resolver":"004180f0","scope":"original selector with explicit CRT and file-existence fixture boundaries",
         "rule":"logical basename selects PNG, BMP, RCT, RC8 in order, regardless of supplied image suffix",

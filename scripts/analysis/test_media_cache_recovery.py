@@ -101,6 +101,17 @@ def saved_case(channel, external, legacy, extended=False, elapsed=50, paused=Fal
 
 def stack_and_replacement():
     rows = []
+    for initial, current in ((1000, 350), (0, 350), (700, 0)):
+        lua, system, vm, transport, options, boundary, call = fixture()
+        call("$set_musicvolume", initial)
+        call("$extmusic", "alias", "loop")
+        call("$music_push")
+        call("$set_musicvolume", current)
+        call("$music_pop")
+        assert boundary.events[-1]["action"] == "play"
+        assert boundary.events[-1]["volume"] == current, boundary.events
+        rows.append({"case": "popped_music_uses_current_master_volume", "initial": initial,
+                     "current": current, "status": "passed"})
     for legacy in (False, True):
         lua, system, vm, transport, options, boundary, call = fixture()
         call("$extmusic", "alias", "loop")

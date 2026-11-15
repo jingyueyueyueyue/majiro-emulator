@@ -35,7 +35,7 @@ struct NativeReadmark {
 struct NativeReadmarks {
     std::vector<NativeReadmark> records;
 };
-enum class NativeSaveKind { unknown, system, story_103, story_105 };
+enum class NativeSaveKind { unknown, system, story_103, story_105, story_104, story_102 };
 NativeSaveKind identify_native_save(const std::vector<uint8_t>& data);
 NativeSystemSave read_native_system_save(const std::vector<uint8_t>& data);
 NativeSystemSave read_native_system_save(const ReadAt& read, uint64_t bytes);

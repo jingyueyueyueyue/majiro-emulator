@@ -176,7 +176,8 @@ function M.install(define,state,options)
     if current then host(vm,'stop',current)end
     media.channels.music=spec or nil
     if spec then
-      spec.started=wall_now();host(vm,'play',spec)
+      spec.started=wall_now();spec.volume=effective(spec)
+      if host(vm,'play',spec)==false then vm:fail('popped music playback rejected by host')end
       if spec.frequency and host(vm,'frequency',spec)==false then
         vm:fail('popped music frequency rejected by host')
       end
@@ -585,6 +586,9 @@ function M.install(define,state,options)
     if previous and previous.page~=page then state.pages[previous.page]=nil end
     if page>=state.next_page then state.next_page=page+1 end
     state.pages[page]={width=width,height=height,depth=32,movie_texture=true}
+    -- Copies can retain frames after the decoder stops. Future checkpoints
+    -- must freeze the actual page state rather than replay a moving source.
+    state.pixel_checkpoint=true
     media.movie=nil
     media.movie_texture=spec
     return 0

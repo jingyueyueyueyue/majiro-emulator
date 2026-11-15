@@ -45,7 +45,8 @@ def main():
         ("online_translation", ["scripts/analysis/test_online_translation.py"]),
         ("engine_semantics", ["scripts/build/run_player_semantics.py"]),
         ("story_entry_regressions", ["scripts/analysis/test_story_entry_regressions.py","--pages","30","--seconds","25"]),
-        ("chapter_entry_regressions", ["scripts/analysis/test_chapter_regressions.py","--pages","3","--seconds","1.5","--jobs","3"]),
+        ("chapter_entry_regressions", ["scripts/analysis/test_chapter_regressions.py","--pixels",
+                                       "--pages","3","--seconds","120","--jobs","3"]),
     ]
     if args.android:
         commands.extend([

@@ -15,6 +15,8 @@ constexpr size_t kSystemHeader = 0x9c58, kReadmarkHeader = 0x94;
 constexpr uint64_t kMaxBytes = 64 * 1024 * 1024, kMaxRecords = 1000000;
 constexpr std::string_view kSystem("MajiroSysV1.100\0", 16);
 constexpr std::string_view kStory103("MajiroSavV1.103\0", 16);
+constexpr std::string_view kStory102("MajiroSavV1.102\0", 16);
+constexpr std::string_view kStory104("MajiroSavV1.104\0", 16);
 constexpr std::string_view kStory105("MajiroSavV1.105\0", 16);
 
 void require(bool good, const char* error) {
@@ -198,13 +200,16 @@ void json_object(std::ostream& out, const NativeSaveObject& object) {
 NativeSaveKind identify_native_save(const std::vector<uint8_t>& data) {
     if (signature(data, kSystem)) return NativeSaveKind::system;
     if (signature(data, kStory103)) return NativeSaveKind::story_103;
+    if (signature(data, kStory102)) return NativeSaveKind::story_102;
+    if (signature(data, kStory104)) return NativeSaveKind::story_104;
     if (signature(data, kStory105)) return NativeSaveKind::story_105;
     return NativeSaveKind::unknown;
 }
 NativeSystemSave read_native_system_save(const std::vector<uint8_t>& data) {
     require(data.size() <= kMaxBytes, "native save exceeds size bound");
     auto kind = identify_native_save(data);
-    require(kind != NativeSaveKind::story_103 && kind != NativeSaveKind::story_105,
+    require(kind != NativeSaveKind::story_102 && kind != NativeSaveKind::story_103 &&
+            kind != NativeSaveKind::story_104 && kind != NativeSaveKind::story_105,
             "native story-slot import is not implemented; refusing partial restore");
     require(kind == NativeSaveKind::system, "unsupported native system-save signature");
     require(data.size() >= kSystemHeader, "truncated native system-save header");

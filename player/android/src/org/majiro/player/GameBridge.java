@@ -1016,6 +1016,10 @@ public final class GameBridge {
         return file.getAbsolutePath();
     }
 
+    public static boolean isMediaCacheValid(String path, long expectedSize) throws Exception {
+        return MediaCache.isValid(new File(path), expectedSize);
+    }
+
     public static long duration(String path) throws Exception {
         MediaMetadataRetriever metadata = new MediaMetadataRetriever();
         try {
@@ -1114,6 +1118,14 @@ public final class GameBridge {
     }
     public static synchronized int[] movieFrame() throws Exception {
         return MovieTextures.frame();
+    }
+    public static long moviePosition() throws Exception {return MovieTextures.position();}
+    public static int restoreMovie(String action,String path,int volume,boolean loop,
+                                   long from,long to,long position) throws Exception {
+        Uri uri=resolve(path);
+        if(uri==null)throw new IllegalStateException("movie resource unavailable: "+path);
+        movieVolume=volume;
+        return MovieTextures.play(context,uri,loop,from,to,volume,position);
     }
     public static String externalSave(String action,String data) throws Exception {
         return ExternalSaveIO.exchange((Activity)context,action,data);

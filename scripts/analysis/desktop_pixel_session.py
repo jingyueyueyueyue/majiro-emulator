@@ -44,7 +44,7 @@ class PixelSession(Startup):
     def decoded(self,requested,alpha,indexed):
         if requested.startswith(("save://","cache://")):return self.local_path(requested)
         metadata=self.image(requested);name=metadata["name"]
-        marker=(name,alpha,indexed,self.system["state"]["picture_key"]if self.system else"")
+        marker=(name,alpha,indexed,self.picture_password)
         if marker in self.decoded_paths:return self.decoded_paths[marker]
         owner=self
         class View:
@@ -57,7 +57,7 @@ class PixelSession(Startup):
                     if key(candidate)in owner.resources:return owner.resource(candidate)
                 raise ValueError("missing image "+name)
         decoder=Decoder(View())
-        password=self.system["state"]["picture_key"]if self.system else None
+        password=self.picture_password
         if password:decoder.encryption_key=image_key(password.encode("cp932"))
         if name not in self.resources and name.endswith("_.rc8")and name[:-5]+".png"in self.resources:
             source=self.resource(name[:-5]+".png").read()

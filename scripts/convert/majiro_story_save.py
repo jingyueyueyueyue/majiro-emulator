@@ -8,7 +8,9 @@ import struct
 
 from majiro_native_save import MAX_FILE_BYTES, MAX_RECORDS, SYSTEM_HEADER, _Pool
 
-PROFILES = {b"MajiroSavV1.103\0": (0xA3E0, 0x90, 3),
+PROFILES = {b"MajiroSavV1.102\0": (0x9FD0, 0x90, 3),
+            b"MajiroSavV1.103\0": (0xA3E0, 0x90, 3),
+            b"MajiroSavV1.104\0": (0xA560, 0x210, 3),
             b"MajiroSavV1.105\0": (0xA560, 0x210, 4)}
 
 

@@ -4,7 +4,8 @@ local replay_operations={create=true,load=true,load8=true,alpha=true,antidata=tr
   extcopy=true,swap=true,fill=true,extfill=true,mulfill=true,set=true,sepia=true,alphatable=true,
   text=true,glyphs=true,paste=true,modify=true,thumbnail=true,release=true,drawmode=true,
   reverse=true,revmulcopy=true,mulcopy=true,overlayfill=true,mosaic=true,
-  thumbrect=true,fuchidori=true,tablecopy=true,smoothframe=true}
+  thumbrect=true,fuchidori=true,tablecopy=true,smoothframe=true,
+  page_state=true,page_pixels=true}
 function M.validate_checkpoint(packet,commands)
   assert(type(packet)=='table'and packet.schema==1 and type(packet.state)=='table'
     and type(packet.vm)=='table'and type(commands)=='table','invalid checkpoint structure')
@@ -29,6 +30,15 @@ function M.validate_checkpoint(packet,commands)
     assert(type(channel)=='string'and type(spec)=='table'and spec.id==channel
       and type(spec.file)=='string'and finite(spec.started)and finite(spec.duration_ms)
       and spec.duration_ms>=0 and finite(spec.generation),'invalid checkpoint audio channel')
+  end
+  for _,name in ipairs{'movie','movie_texture'}do
+    local spec=saved.media[name]
+    if spec then
+      assert(type(spec)=='table'and type(spec.file)=='string'and finite(spec.started)
+        and finite(spec.duration_ms)and spec.duration_ms>=0,'invalid checkpoint movie')
+      assert(spec.position_ms==nil or(finite(spec.position_ms)and spec.position_ms>=0
+        and spec.position_ms%1==0),'invalid checkpoint movie position')
+    end
   end
   for _,command in ipairs(commands)do
     assert(type(command)=='string'and #command<60000 and
@@ -116,7 +126,18 @@ function M.install(define,state,options,providers,graphics)
   -- Exactly the replayable mutations recorded by the independent syscall
   -- graphics journal. Transactions and host/platform operations are not data.
   local function snapshot(vm,compacted)
-    if not compacted then
+    if state.pixel_checkpoint then
+      local data=assert(options.graphics('checkpoint_export'),'pixel checkpoint provider missing')
+      assert(data:sub(1,3)=='OK\n','pixel checkpoint export failed: '..data)
+      local commands,offset={},4
+      while offset<=#data do
+        local ending=assert(data:find('\n',offset,true),'pixel checkpoint length missing')
+        local length=assert(tonumber(data:sub(offset,ending-1)),'pixel checkpoint length invalid')
+        assert(length>0 and length<55000 and ending+length<=#data,'pixel checkpoint truncated')
+        commands[#commands+1]=data:sub(ending+1,ending+length);offset=ending+length+1
+      end
+      state.graphics_journal=commands
+    elseif not compacted then
       state.graphics_journal=graphics_checkpoint.compact(state.graphics_journal,state.pages)
     end
     local saved={}
@@ -126,6 +147,15 @@ function M.install(define,state,options,providers,graphics)
     local packet=codec.clone{schema=1,identity=options.source_identity,clock=options.now(),
       wall_clock=(options.wall_now or options.now)(),
       vm=vm:export_state(),state=saved}
+    if options.archive_state then packet.archives=codec.clone(options.archive_state('snapshot'))end
+    local movie=packet.state.media.movie_texture or packet.state.media.movie
+    if movie then
+      local position=options.movie_position and options.movie_position()
+      if position~=nil then
+        assert(type(position)=='number'and position>=0 and position%1==0,'invalid movie checkpoint position')
+        movie.position_ms=position
+      end
+    end
     packet.graphics={}
     for i,request in ipairs(state.graphics_journal)do packet.graphics[i]=request end
     return packet
@@ -187,7 +217,7 @@ function M.install(define,state,options,providers,graphics)
     local slot=key(args[1])
     local data={schema=checkpoint.schema,identity=checkpoint.identity,clock=checkpoint.clock,
       wall_clock=checkpoint.wall_clock,
-      vm=checkpoint.vm,state=checkpoint.state}
+      vm=checkpoint.vm,state=checkpoint.state,archives=checkpoint.archives}
     local object=store:put(codec.encode(data))
     local graphic_objects=graphics_objects(checkpoint.graphics)
     local thumbnail='thumb_'..store:object_key(object)..'.png'
@@ -230,6 +260,26 @@ function M.install(define,state,options,providers,graphics)
     end
     return fill(saved),memo,fill
   end
+  local function replay_movie(spec,clock,position)
+    local request={}
+    for name,value in pairs(spec)do request[name]=value end
+    local from=spec.range_from or 0
+    local ending=(spec.range_to and spec.range_to>=0)and spec.range_to or spec.duration_ms
+    position=position or spec.position_ms
+    if position==nil then
+      local elapsed=math.max(0,(spec.paused_at or clock)-spec.started)
+      if spec.repeat_play and ending>from then elapsed=elapsed%(ending-from)end
+      position=from+elapsed
+    end
+    if not spec.repeat_play and ending>from and position>=ending then return false end
+    request.resume_position_ms=math.max(from,position)
+    if spec.texture then request.page_hint=spec.page end
+    local action=spec.texture and'texture_play'or spec.range_to and'play_fromto'or
+      spec.repeat_play and'play_repeat'or'play'
+    local value=options.movie(action,request)
+    assert(value~=false and value~=0,'movie restart rejected')
+    return true
+  end
   local function restore(vm,packet,commands,validated,transaction,persistent,compacted)
     if not compacted then commands=graphics_checkpoint.compact(commands,packet.state.pages)end
     local saved_registry=state.registry;local saved_progress=state.progress
@@ -248,7 +298,7 @@ function M.install(define,state,options,providers,graphics)
       transaction.stopped[#transaction.stopped+1]=spec
       assert(options.audio('stop',spec)~=false,'audio cleanup rejected during load')
     end
-    if validated and options.movie then
+    if validated and options.movie and not transaction.movie then
       local previous=state.media.movie_texture or state.media.movie
       if previous then
         transaction.movie=previous
@@ -267,6 +317,13 @@ function M.install(define,state,options,providers,graphics)
       audio_generations[channel]={before=spec.generation,after=state.media.generation}
       spec.generation=state.media.generation
     end
+    local movie=state.media.movie_texture or state.media.movie
+    local movie_generation
+    if movie then
+      state.media.generation=state.media.generation+1
+      movie_generation={before=movie.generation,after=state.media.generation}
+      movie.generation=state.media.generation
+    end
     -- Audio waits also live inside suspended event-return continuations.
     -- Rebind only waits that owned the saved transport; already-stale waits
     -- must remain stale instead of acquiring an unrelated restored stream.
@@ -275,6 +332,7 @@ function M.install(define,state,options,providers,graphics)
       if type(value)~='table'or visited[value]then return end
       visited[value]=true
       local owner=value.kind=='audio'and audio_generations[value.channel]
+      if value.kind=='movie'then owner=movie_generation end
       if owner and value.generation==owner.before then value.generation=owner.after end
       for _,child in pairs(value)do rebind_audio(child)end
     end
@@ -283,6 +341,8 @@ function M.install(define,state,options,providers,graphics)
     state.registry=saved_registry;state.save_catalog=index.slots
     for name,value in pairs(saved_settings)do state.settings[name]=value end
     for name,value in pairs(saved_progress.pictures or{})do state.progress.pictures[name]=value end
+    state.progress.native_pictures=state.progress.native_pictures or{}
+    for hash,value in pairs(saved_progress.native_pictures or{})do state.progress.native_pictures[hash]=value end
     for position,value in pairs(saved_progress.read or{})do state.progress.read[position]=value end
     state.progress.lines=state.progress.lines or{}
     for position,value in pairs(saved_progress.lines or{})do state.progress.lines[position]=value end
@@ -294,7 +354,7 @@ function M.install(define,state,options,providers,graphics)
       -- reload a resource after the live state/graphics have been committed.
       local loader=vm.loader
       vm.loader=function(name)
-        local script=validated.scripts[name]
+        local script=validated.scripts[name]or(validated.script_aliases or{})[name]
         assert(script,'validated native script unavailable: '..name)
         return script
       end
@@ -317,6 +377,13 @@ function M.install(define,state,options,providers,graphics)
       if spec.loop or at-spec.started<spec.duration_ms then
         transaction.restarted[#transaction.restarted+1]=spec
         if state.media.replay then state.media.replay(vm,spec)else options.audio('play',spec)end
+      end
+    end
+    if movie then
+      assert(options.movie,'checkpoint movie provider unavailable')
+      transaction.new_movie=movie
+      if not replay_movie(movie,packet.wall_clock or packet.clock)then
+        state.media.movie=nil;state.media.movie_texture=nil
       end
     end
     state.dirty=true;state.load_generation=(state.load_generation or 0)+1
@@ -343,25 +410,89 @@ function M.install(define,state,options,providers,graphics)
       end
     end
   end
-  local function staged_restore(vm,packet,commands,persistent)
+  local function rebuild_native(vm,rebuild,transaction)
+    for _,request in ipairs(rebuild.audio)do
+      local pending={id=request.channel,file='',generation=state.media.generation+1}
+      transaction.restarted[#transaction.restarted+1]=pending
+      providers['$'..request.channel..'_vol'](vm,{request.gain})
+      if request.second~=''then providers['$ext'..request.channel](vm,{request.first,request.second})
+      else providers['$'..request.channel](vm,{request.first,request.loop})end
+    end
+    local event=state.events.HOT_RESET
+    assert(event and #event>0,'native scene reconstruction callback is unavailable')
+    local calls={}
+    for _,hook in ipairs(event)do
+      local script=vm:load(hook.script)
+      assert(script.positions[hook.offset],'native scene reconstruction callback source missing')
+      calls[#calls+1]={script=script.name,offset=hook.offset,args={rebuild.text_first_render,'',1}}
+    end
+    local completed=false
+    local depth=#vm.frames
+    vm:resume{kind='sequence',calls=calls,done=function()completed=true end}
+    local began=(options.wall_now or options.now)()
+    for _=1,200000 do
+      if completed then break end
+      if vm.waiting and vm.waiting.kind=='yield'then vm:run(1)
+      elseif vm.waiting then
+        assert(options.native_rebuild_step,'native scene scheduler unavailable')
+        if vm.waiting.kind=='present'then
+          assert(options.native_present,'native scene presentation unavailable')
+          options.native_present()
+        end
+        options.native_rebuild_step(vm)
+        if vm.waiting then
+          local deadline=vm:next_deadline()
+          assert(deadline and deadline-began<=30000,
+            'native scene requires unavailable interactive state: '..tostring(vm.waiting.kind)..
+            ' deadline='..tostring(deadline)..' began='..tostring(began))
+          options.set_clock(math.max((options.wall_now or options.now)()+1,deadline))
+          options.native_rebuild_step(vm)
+        end
+      else vm:run(1)end
+      assert(vm.status~='blocked'and vm.status~='finished','native scene reconstruction stopped')
+    end
+    assert(completed and #vm.frames==depth,'native scene reconstruction budget exhausted')
+  end
+  local function staged_restore(vm,packet,commands,persistent,native_rebuild)
     assert(not vm.modal_dialog and not vm.external_checker,'load owner request is pending')
     assert(options.set_clock,'checkpoint clock restore is unavailable')
     M.validate_checkpoint(packet,commands)
     local compacted=graphics_checkpoint.compact(commands,packet.state.pages)
     -- Stage private script copies so the live loader cannot change or fail
     -- between validation and committing the graphics/state transaction.
+    local script_aliases={}
     local staging=options.modules('runtime/majiro_vm.lua').new{
-      loader=function(name)return codec.clone(vm.loader(name))end,
+      loader=function(name)
+        local script=codec.clone(vm.loader(name));script_aliases[name]=script;return script
+      end,
       opcodes=vm.opcodes,syscall=vm.syscall,numeric_profile=vm.numeric_profile,
       array_3d_legacy_stride=vm.array_3d_legacy_stride,
       string_ops=vm.string_ops,text_ops=vm.text_ops,case_string_relations=vm.case_string_relations}
-    staging:import_state(codec.clone(packet.vm))
     local undo=undo_tables(state,vm)
     local previous_checkpoint=checkpoint
     local previous_clock=(options.wall_now or options.now)()
     local transaction={stopped={},restarted={}}
     local begun=false
     local ok,problem=pcall(function()
+      if packet.archives~=nil then
+        assert(options.archive_state,'checkpoint resource-state provider unavailable')
+        assert(options.archive_state('validate',packet.archives)==0,'checkpoint archive validation failed')
+        transaction.archives=codec.clone(options.archive_state('snapshot'))
+        assert(options.archive_state('restore',packet.archives)==0,'checkpoint archive restore failed')
+      end
+      if options.picture_key then
+        transaction.picture_key=state.picture_key
+        transaction.key_changed=true
+        options.picture_key(packet.state.picture_key)
+      end
+      staging:import_state(codec.clone(packet.vm))
+      staging.script_aliases=script_aliases
+      local previous=state.media.movie_texture or state.media.movie
+      if previous and options.movie then
+        transaction.movie=previous
+        transaction.movie_position=options.movie_position and options.movie_position()
+        assert(options.movie('checkpoint_detach',previous)~=false,'movie cleanup rejected during load')
+      end
       assert(options.graphics('checkpoint_begin')=='OK','load requires transactional graphics staging')
       begun=true;state.restoring=true
       assert(options.graphics('reset_pages')=='OK','load graphics staging reset failed')
@@ -369,6 +500,11 @@ function M.install(define,state,options,providers,graphics)
         assert(options.graphics(batch)=='OK','load graphics staging failed')
       end)
       restore(vm,packet,compacted,staging,transaction,persistent,true)
+      if native_rebuild then
+        rebuild_native(vm,native_rebuild,transaction)
+        state.pixel_checkpoint=true
+        checkpoint=snapshot(vm)
+      end
       -- Commit only after every fallible state/VM/clock/media operation.
       assert(options.graphics('checkpoint_commit')=='OK','load graphics commit failed')
       begun=false;state.restoring=false
@@ -378,6 +514,19 @@ function M.install(define,state,options,providers,graphics)
       local function recover(label,action)
         local success,why=pcall(action)
         if not success then failures[#failures+1]=label..': '..tostring(why)end
+      end
+      if transaction.new_movie then
+        recover('new movie cleanup',function()
+          assert(options.movie('checkpoint_detach',transaction.new_movie)~=false,'rejected')
+        end)
+      end
+      if transaction.archives then
+        recover('archive rollback',function()
+          assert(options.archive_state('restore',transaction.archives)==0,'rejected')
+        end)
+      end
+      if transaction.key_changed then
+        recover('picture key rollback',function()options.picture_key(transaction.picture_key)end)
       end
       for _,spec in ipairs(transaction.restarted)do
         recover('new audio cleanup',function()
@@ -397,13 +546,7 @@ function M.install(define,state,options,providers,graphics)
       end
       if transaction.movie then
         recover('movie rollback',function()
-          local spec=transaction.movie;local copy={}
-          for key,value in pairs(spec)do copy[key]=value end
-          if spec.texture then copy.page_hint=spec.page end
-          local action=spec.texture and'texture_play'or spec.range_to and'play_fromto'or
-            spec.repeat_play and'play_repeat'or'play'
-          local value=options.movie(action,copy)
-          assert(value~=false and value~=0,'movie restart rejected')
+          replay_movie(transaction.movie,previous_clock,transaction.movie_position)
         end)
       end
       -- Media recovery can write pixels. Restore the old page map last.
@@ -521,7 +664,7 @@ function M.install(define,state,options,providers,graphics)
       plan=codec.decode(sealed)
       assert(plan.packet.identity==options.source_identity,'native import plan source changed')
       local saved_persistent=codec.clone(plan.persistent_globals)
-      staged_restore(vm,plan.packet,plan.commands,saved_persistent)
+      staged_restore(vm,plan.packet,plan.commands,saved_persistent,plan.native_rebuild)
       return 0
     end,
     flush=function(vm)

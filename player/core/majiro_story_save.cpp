@@ -61,16 +61,16 @@ NativeStorySave read_native_story_save(const std::vector<uint8_t>& data) {
     NativeStorySave result;
     auto kind = identify_native_save(data);
     size_t header_size = 0;
-    if (kind == NativeSaveKind::story_103) {
-        result.signature = "MajiroSavV1.103";
-        header_size = 0xa3e0;
+    if (kind == NativeSaveKind::story_103 || kind == NativeSaveKind::story_102) {
+        result.signature = kind == NativeSaveKind::story_102 ? "MajiroSavV1.102" : "MajiroSavV1.103";
+        header_size = kind == NativeSaveKind::story_102 ? 0x9fd0 : 0xa3e0;
         result.count_fields_offset = 0x90;
         result.thumbnail_pixel_bytes = 3;
-    } else if (kind == NativeSaveKind::story_105) {
-        result.signature = "MajiroSavV1.105";
+    } else if (kind == NativeSaveKind::story_105 || kind == NativeSaveKind::story_104) {
+        result.signature = kind == NativeSaveKind::story_104 ? "MajiroSavV1.104" : "MajiroSavV1.105";
         header_size = 0xa560;
         result.count_fields_offset = 0x210;
-        result.thumbnail_pixel_bytes = 4;
+        result.thumbnail_pixel_bytes = kind == NativeSaveKind::story_104 ? 3 : 4;
     } else throw std::runtime_error("unsupported native story save signature");
     require(data.size() >= header_size, "truncated native story header");
     size_t c = result.count_fields_offset;

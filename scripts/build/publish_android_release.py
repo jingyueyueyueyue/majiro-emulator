@@ -58,10 +58,10 @@ def main():
         assert certificate==previous["signer_sha256"],"update signer changed"
         notes=args.notes.read_text(encoding="utf8")
         assert notes.startswith("Majiro 0.2\n")and "\n- "in notes
-        notes_file=folder/"release_notes.md";notes_file.write_text(notes,encoding="utf8")
+        notes_file=folder/"release_notes.md";notes_file.write_text(notes,encoding="utf8",newline="\n")
         public_apk=folder/"Majiro-0.2-arm64-v8a.apk";shutil.copyfile(apk,public_apk)
         checksum=folder/"SHA256SUMS.txt"
-        checksum.write_text(package["sha256"]+"  "+public_apk.name+"\n",encoding="ascii")
+        checksum.write_text(package["sha256"]+"  "+public_apk.name+"\n",encoding="ascii",newline="\n")
         run("tag_local",["git","tag","-f","-a",args.tag,"-m","Majiro 0.2",commit])
         run("tag_push",["git","push",
             "--force-with-lease=refs/tags/"+args.tag+":"+args.expected_tag,
@@ -71,7 +71,7 @@ def main():
         run("notes",["gh","release","edit",args.tag,"--repo",args.repo,
             "--title","Majiro 0.2","--notes-file",notes_file,"--latest"])
         published=json.loads(run("published_release",["gh","api","repos/"+args.repo+"/releases/tags/"+args.tag]))
-        assert published["body"].strip()==notes.strip()
+        assert published["body"].replace("\r\n","\n").strip()==notes.replace("\r\n","\n").strip()
         live_assets={value["name"]:value for value in published["assets"]}
         for path in (public_apk,checksum):
             assert live_assets[path.name]["digest"]=="sha256:"+sha256(path)

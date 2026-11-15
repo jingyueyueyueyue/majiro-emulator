@@ -1,6 +1,7 @@
 // Generated adapter: pixel algorithms are taken verbatim from the tested native provider.
 #include "portable_pixels.hpp"
 #include "screen_view.hpp"
+#include "page_checkpoint.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>

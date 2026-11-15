@@ -57,6 +57,8 @@ std::vector<size_t> source_order;
 std::map<std::string, Entry> members;
 std::set<std::string> loose_names;
 std::map<std::string,std::string> text_snapshot;
+std::map<std::string,std::set<std::string>> text_catalog;
+std::map<std::string,std::string> archive_text_identity;
 bool text_snapshot_ready=false;
 majiro::TextSnapshotCache text_bytes;
 std::map<std::string, majiro::Image> image_cache;
@@ -75,6 +77,7 @@ bool movie_clear_background=false;
 SDL_FRect movie_rect{0,0,1280,720};
 void refresh_movie_frame();
 std::map<int, bool> key_down;
+std::map<int, int> physical_keys;
 bool cursor_warp_pending=false;
 SDL_Cursor* script_cursor=nullptr;
 float cursor_warp_x=0,cursor_warp_y=0;
@@ -224,7 +227,7 @@ void rebuild_members(){
             members.emplace(key(name),Entry{index,member,name});
         }
     }
-    image_cache.clear();png_transparency_cache.clear();audio_cache.clear();password.clear();has_password=false;
+    image_cache.clear();png_transparency_cache.clear();audio_cache.clear();
 }
 std::string resource_name(const std::string& name,const std::vector<std::string>& extensions={}){
     std::vector<std::string> candidates{name};
@@ -307,7 +310,9 @@ void verify_text_resource(const std::string& name,const std::vector<uint8_t>& ra
     const auto digest=hash(raw),normalized=key(name);
     const auto stamp=majiro::text_resource_stamp(source,digest);
     auto expected=text_snapshot.find(normalized);
-    need((!text_snapshot_ready&&expected==text_snapshot.end())||
+    const auto known=text_catalog.find(normalized);
+    const bool verified_alternative=text_snapshot_ready&&known!=text_catalog.end()&&known->second.count(stamp);
+    need((!text_snapshot_ready&&expected==text_snapshot.end())||verified_alternative||
         (expected!=text_snapshot.end()&&expected->second==stamp),
         "text resource changed during or after launch; restart required: "+normalized);
     const int base=lua_gettop(lua);
@@ -320,7 +325,8 @@ void verify_text_resource(const std::string& name,const std::vector<uint8_t>& ra
         lua_pushlstring(lua,source.path.data(),source.path.size());
         if(lua_pcall(lua,4,0,0)!=0)throw std::runtime_error(argument(lua,-1));
         lua_settop(lua,base);
-        text_snapshot.emplace(normalized,stamp);
+        text_snapshot[normalized]=stamp;
+        if(!text_snapshot_ready)text_catalog[normalized].insert(stamp);
     }catch(...){lua_settop(lua,base);throw;}
 }
 std::string decode_source(const std::vector<uint8_t>& raw,const majiro::TextSource& source){
@@ -412,6 +418,15 @@ void discover_password() {
     need(values.size() == 1, "encrypted image key is unavailable or ambiguous");
     auto raw = convert(std::vector<uint8_t>(values.begin()->begin(), values.begin()->end()), "UTF-8", "windows-31j");
     password.assign(raw.begin(), raw.end()); has_password = true;
+}
+int picture_key(lua_State* state){
+    if(lua_isnoneornil(state,1)){
+        password.clear();has_password=false;image_cache.clear();return 0;
+    }
+    auto text=argument(state,1);
+    auto raw=convert(std::vector<uint8_t>(text.begin(),text.end()),"UTF-8","windows-31j");
+    password.assign(raw.begin(),raw.end());has_password=true;
+    image_cache.clear();return 0;
 }
 void debug(const std::string& text);
 majiro::Image load_image(std::string name, bool with_alpha=false, std::set<std::string> active = {}) {
@@ -652,6 +667,24 @@ int member_names(lua_State* state) {
     }
     return 1;
 }
+void pin_archive_text(int fd,const majiro::Archive& archive,const std::string& name,
+                      const std::string& scope,bool image_only){
+    std::string identity;
+    if(!image_only)for(const auto& member:archive.members){
+        auto decoded=convert(std::vector<uint8_t>(member.raw_name.begin(),member.raw_name.end()),
+                             "windows-31j","UTF-8");
+        const auto normalized=key(decoded);
+        if(!majiro::text_resource_member(normalized))continue;
+        auto raw=read_at(fd,member.offset,member.size);
+        const auto digest=hash(raw);
+        identity+=normalized+"\n"+digest+"\n";
+        if(!text_snapshot_ready){
+            majiro::TextSource source{scope,name+"/"+normalized};
+            text_catalog[normalized].insert(majiro::text_resource_stamp(source,digest));
+        }
+    }
+    archive_text_identity[key(name)]=hash(std::vector<uint8_t>(identity.begin(),identity.end()));
+}
 int archive_control(lua_State* state){
     auto action=argument(state,1),name=key(argument(state,2));
     if(action=="release"){
@@ -675,7 +708,9 @@ int archive_control(lua_State* state){
                 majiro::ReadAt read=[fd](uint64_t at,uint8_t* out,size_t count){
                     auto data=read_at(fd,at,count);std::copy(data.begin(),data.end(),out);
                 };
-                sources.push_back(Source{fd,bytes,majiro::read_archive(read,bytes),name,true,scope=="images",scope});
+                auto archive=majiro::read_archive(read,bytes);
+                pin_archive_text(fd,archive,name,scope,scope=="images");
+                sources.push_back(Source{fd,bytes,std::move(archive),name,true,scope=="images",scope});
             }catch(...){close(fd);throw;}
         }
         sources[index].active=true;
@@ -683,6 +718,55 @@ int archive_control(lua_State* state){
         source_order.insert(source_order.begin(),index);
     }else throw std::runtime_error("unknown archive action: "+action);
     rebuild_members();lua_pushinteger(state,0);return 1;
+}
+std::vector<size_t> checked_archive_order(const std::vector<std::pair<std::string,bool>>& rows){
+    need(rows.size()<=sources.size(),"archive checkpoint exceeds current resource inventory");
+    std::vector<size_t> order;std::set<size_t> seen;
+    for(const auto& row:rows){
+        auto found=std::find_if(sources.begin(),sources.end(),
+            [&](const auto& source){return key(source.name)==key(row.first);});
+        need(found!=sources.end(),"saved archive is unavailable: "+row.first);
+        const auto index=size_t(found-sources.begin());
+        need(seen.insert(index).second,"duplicate saved archive: "+row.first);
+        order.push_back(index);
+    }
+    for(size_t index=0;index<sources.size();++index)if(!seen.count(index))order.push_back(index);
+    return order;
+}
+int archive_state(lua_State* state){
+    const auto action=argument(state,1);
+    if(action=="restore"||action=="validate"){
+        luaL_checktype(state,2,LUA_TTABLE);
+        std::vector<std::pair<std::string,bool>> rows;
+        for(size_t i=1;i<=lua_objlen(state,2);++i){
+            lua_rawgeti(state,2,int(i));luaL_checktype(state,-1,LUA_TTABLE);
+            const auto name=field(state,-1,"name");
+            const auto identity=field(state,-1,"text_identity");
+            const auto pinned=archive_text_identity.find(key(name));
+            need(identity.empty()||(pinned!=archive_text_identity.end()&&pinned->second==identity),
+                 "saved archive text content changed: "+name);
+            lua_getfield(state,-1,"active");need(lua_isboolean(state,-1),"invalid saved archive activation");
+            const bool active=lua_toboolean(state,-1);lua_pop(state,2);
+            rows.emplace_back(name,active);
+        }
+        auto order=checked_archive_order(rows);
+        if(action=="restore"){
+            for(auto& source:sources)source.active=false;
+            for(size_t i=0;i<rows.size();++i)sources[order[i]].active=rows[i].second;
+            source_order=std::move(order);rebuild_members();
+        }
+        lua_pushinteger(state,0);return 1;
+    }
+    need(action=="snapshot","unknown archive checkpoint action");
+    lua_newtable(state);
+    for(size_t i=0;i<source_order.size();++i){
+        const auto& source=sources[source_order[i]];
+        lua_newtable(state);text_field(state,"name",source.name);
+        text_field(state,"text_identity",archive_text_identity.at(key(source.name)));
+        lua_pushboolean(state,source.active);lua_setfield(state,-2,"active");
+        lua_rawseti(state,-2,int(i+1));
+    }
+    return 1;
 }
 int identity(lua_State* state) {
     auto source=static_cast<jstring>(env->CallStaticObjectMethod(
@@ -896,6 +980,8 @@ int platform(lua_State* state) {
         auto mods=SDL_GetModState();
         SDL_SetModState(static_cast<SDL_Keymod>(parameter(1)!=0
             ?mods|SDL_KMOD_CAPS:mods&~SDL_KMOD_CAPS));
+    }else if(action=="cursor_visible"){
+        need(parameter(1)!=0?SDL_ShowCursor():SDL_HideCursor(),SDL_GetError());
     }else if(action=="display_scale"){
         auto value=parameter(1);
         auto window=SDL_GetRenderWindow(renderer);
@@ -965,8 +1051,16 @@ int font_filter(lua_State* state) {
 int media_asset(lua_State* state) {
     auto name = argument(state, 1);
     auto found = audio_cache.find(key(name));
+    auto verify_content = [](const std::string& filename, uint64_t bytes) {
+        auto path = java_string(filename);
+        auto valid = env->CallStaticBooleanMethod(bridge,
+            method("isMediaCacheValid", "(Ljava/lang/String;J)Z"), path, jlong(bytes));
+        env->DeleteLocalRef(path); checked_java();
+        return valid == JNI_TRUE;
+    };
     if (found == audio_cache.end() ||
-        !majiro::android_host::cached_media_file_valid(found->second.path, found->second.bytes)) {
+        !majiro::android_host::cached_media_file_valid(
+            found->second.path, found->second.bytes, verify_content)) {
         auto data = read_member(name);
         auto bytes = byte_array(data);
         auto filename = java_string(name);
@@ -1006,6 +1100,18 @@ int movie_command(const std::string& operation,const std::string& path,int volum
     env->DeleteLocalRef(action); env->DeleteLocalRef(file); checked_java();
     return result;
 }
+int movie_restore_command(const std::string& operation,const std::string& path,int volume,bool loop,
+                          jlong from,jlong to,jlong position){
+    auto action=java_string(operation),file=java_string(path);
+    int result=env->CallStaticIntMethod(bridge,
+        method("restoreMovie","(Ljava/lang/String;Ljava/lang/String;IZJJJ)I"),
+        action,file,volume,jboolean(loop),from,to,position);
+    env->DeleteLocalRef(action);env->DeleteLocalRef(file);checked_java();return result;
+}
+int movie_position(lua_State* state){
+    auto position=env->CallStaticLongMethod(bridge,method("moviePosition","()J"));
+    checked_java();lua_pushnumber(state,double(position));return 1;
+}
 void refresh_movie_frame(){
     if(!movie_texture_mode&&!movie_surface_active)return;
     auto array=static_cast<jintArray>(env->CallStaticObjectMethod(bridge,method("movieFrame","()[I")));
@@ -1028,7 +1134,7 @@ void refresh_movie_frame(){
     }
     movie_sequence=head[2];
     if(movie_texture_mode&&movie_page>0){
-        auto response=majiro::pixels::command("load "+std::to_string(movie_page)+" 0 movie://texture");
+        auto response=majiro::pixels::command("frame "+std::to_string(movie_page)+" movie://texture");
         need(response.rfind("OK",0)==0,response);
     }else if(movie_surface_active){
         presentation.movie.changed();
@@ -1062,9 +1168,14 @@ int movie(lua_State* state) {
         }
     }
     const bool detach=action=="checkpoint_detach";
-    int result=movie_command(detach?"stop":action,field(state,2,"file"),int(numeric(state,2,"volume",1000)),
-                             boolean(state,2,"repeat_play"),jlong(numeric(state,2,"range_from")),
-                             jlong(numeric(state,2,"range_to",-1)));
+    const auto position=numeric(state,2,"resume_position_ms",-1);
+    int result=playing&&position>=0
+        ?movie_restore_command(action,field(state,2,"file"),int(numeric(state,2,"volume",1000)),
+            boolean(state,2,"repeat_play"),jlong(numeric(state,2,"range_from")),
+            jlong(numeric(state,2,"range_to",-1)),jlong(position))
+        :movie_command(detach?"stop":action,field(state,2,"file"),int(numeric(state,2,"volume",1000)),
+            boolean(state,2,"repeat_play"),jlong(numeric(state,2,"range_from")),
+            jlong(numeric(state,2,"range_to",-1)));
     if(playing)refresh_movie_frame();
     if(action=="status"&&result==0)movie_surface_active=false;
     if(action=="stop"||action=="texture_stop"||detach){
@@ -1098,6 +1209,7 @@ void host_functions() {
     HOST(pin_text_resource);
     HOST(encode_text);HOST(decode_text);HOST(set_text_identity);
     HOST(archive_control);
+    HOST(archive_state);
     HOST(script_file_read);HOST(script_file_write);
     HOST(member_names); HOST(identity); HOST(engine_requirements); HOST(image_metadata); HOST(image_asset); HOST(script);
     HOST(graphics); HOST(storage);HOST(external_save); HOST(dialog);HOST(platform); HOST(debug_output); HOST(load_font);
@@ -1105,7 +1217,8 @@ void host_functions() {
     HOST(resize_window);
     HOST(font_filter);
     HOST(set_clock); HOST(screen_mode);HOST(screen_fit); HOST(font_dialog);
-    HOST(media_asset); HOST(audio); HOST(movie); HOST(movies);
+    HOST(media_asset); HOST(audio); HOST(movie); HOST(movie_position); HOST(movies);
+    HOST(picture_key);
 #undef HOST
     lua_setglobal(lua, "HOST");
 }
@@ -1157,6 +1270,7 @@ void initialize_sources() {
         }
         source_order.push_back(index);
         sources.push_back(Source{fd, size, std::move(archive),row.substr(0,first),true,image_only,scope});
+        pin_archive_text(fd,sources.back().archive,row.substr(0,first),scope,image_only);
     }
     need(!sources.empty(), "no game archives found");
 }
@@ -1435,22 +1549,29 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** 
                 else if (event.type == SDL_EVENT_WILL_ENTER_BACKGROUND) {
                     if (!paused) paused_at = SDL_GetTicks();
                     paused = true; render_paused=true; held = 0;
-                    key_down.clear();buttons=0;pressed.clear();input_activity=0;
+                    key_down.clear();physical_keys.clear();buttons=0;pressed.clear();input_activity=0;
                 } else if (event.type == SDL_EVENT_DID_ENTER_FOREGROUND) {
                     if (paused) began += SDL_GetTicks() - paused_at;
                     paused = false;render_paused=false;
                     presentation.event(SDL_EVENT_DID_ENTER_FOREGROUND);
                 }
                 else if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST){
-                    key_down.clear();held=0;buttons=0;pressed.clear();
+                    key_down.clear();physical_keys.clear();held=0;buttons=0;pressed.clear();
                 }
                 else if (!paused && event.type == SDL_EVENT_MOUSE_MOTION) { x = event.motion.x; y = event.motion.y; }
                 else if (!paused && event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                     x = event.button.x; y = event.button.y;
-                    int bit = event.button.button == SDL_BUTTON_RIGHT ? 2 : 1;
+                    int bit = event.button.button == SDL_BUTTON_RIGHT ? 2 :
+                        event.button.button == SDL_BUTTON_LEFT ? 1 : 0;
                     buttons |= bit; held |= bit;
                 } else if (!paused && event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
-                    int bit = event.button.button == SDL_BUTTON_RIGHT ? 2 : 1; held &= ~bit;
+                    int bit = event.button.button == SDL_BUTTON_RIGHT ? 2 :
+                        event.button.button == SDL_BUTTON_LEFT ? 1 : 0; held &= ~bit;
+                } else if (!paused && event.type == SDL_EVENT_MOUSE_WHEEL) {
+                    const float delta=event.wheel.direction==SDL_MOUSEWHEEL_FLIPPED
+                        ?-event.wheel.y:event.wheel.y;
+                    // Original WM_MOUSEWHEEL feeds the PageUp/PageDown slots.
+                    if(delta!=0)pressed.push_back(delta>0?33:34);
                 } else if (!paused && (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP)) {
                     bool down=event.type==SDL_EVENT_KEY_DOWN;
                     int code=0;
@@ -1470,7 +1591,14 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** 
                         case SDLK_CAPSLOCK:code=20;break;
                         default:break;
                     }
-                    if(code){if(down&&!key_down[code])pressed.push_back(code);key_down[code]=down;}
+                    if(code){
+                        const bool was=key_down[code];
+                        if(down)physical_keys[int(key)]=code;else physical_keys.erase(int(key));
+                        bool held_key=false;
+                        for(const auto& physical:physical_keys)if(physical.second==code){held_key=true;break;}
+                        key_down[code]=held_key;
+                        if(down&&!was)pressed.push_back(code);
+                    }
                 }
             }
             if(quit)break;
@@ -1563,9 +1691,9 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** 
     majiro::pixels::install({});
     for (const auto& source : sources) close(source.descriptor);
     sources.clear();source_order.clear(); members.clear();loose_names.clear(); image_cache.clear();png_transparency_cache.clear(); audio_cache.clear();
-    text_snapshot.clear();text_snapshot_ready=false;
+    text_snapshot.clear();text_catalog.clear();archive_text_identity.clear();text_snapshot_ready=false;
     text_bytes.clear();
-    password.clear();has_password=false;key_down.clear();cursor_warp_pending=false;
+    password.clear();has_password=false;key_down.clear();physical_keys.clear();cursor_warp_pending=false;
     for (auto& client : debug_clients) close(client.descriptor);
     debug_clients.clear();
     if (debug_socket >= 0) close(debug_socket); debug_socket = -1;

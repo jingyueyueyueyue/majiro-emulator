@@ -31,6 +31,8 @@ SUITES = (
     "test_argument_semantics",
     "test_optional_argument_slots",
     "test_call_semantics",
+    "test_init_lookup",
+    "test_syscall_result_contract",
     "test_execution_remaining",
     "test_scalar_syscalls",
     "test_array_syscalls",

@@ -1,6 +1,52 @@
 -- Character-based operations over UTF-8 display strings, with CP932 hashing.
 local M={}
 local function cstring(text)return text:match('^[^%z]*')end
+-- Native strings are byte strings, including old system paths containing
+-- malformed CP932 and duplicate CP932 mappings. Reserve plane-15 private-use
+-- characters for units which cannot make an exact decode/encode roundtrip.
+-- The representation survives the ordinary portable save codec and slicing.
+local native_unit='\243[\176-\191][\128-\191][\128-\191]'
+local function native_escape(code)
+  return string.char(243,176+math.floor(code/4096),
+    128+math.floor(code/64)%64,128+code%64)
+end
+function M.native_encoder(encode)
+  return function(text)
+    if not text:find(native_unit)then return encode(text)end
+    local out,position={},1
+    for first,unit,last in text:gmatch('()('..native_unit..')()')do
+      if first>position then out[#out+1]=encode(text:sub(position,first-1))end
+      local code=(unit:byte(2)-176)*4096+(unit:byte(3)-128)*64+unit:byte(4)-128
+      out[#out+1]=code<256 and string.char(code)or string.char(math.floor(code/256),code%256)
+      position=last
+    end
+    if position<=#text then out[#out+1]=encode(text:sub(position))end
+    return table.concat(out)
+  end
+end
+function M.native_decoder(decode,encode)
+  local cache={}
+  return function(raw)
+    local out,position={},1
+    while position<=#raw do
+      local byte=raw:byte(position)
+      local count=(((byte>=129 and byte<=159)or(byte>=224 and byte<=252))
+        and position<#raw)and 2 or 1
+      local unit=raw:sub(position,position+count-1)
+      local text=cache[unit]
+      if text==nil then
+        local ok,decoded=pcall(decode,unit)
+        local same,encoded=false,nil
+        if ok then same,encoded=pcall(encode,decoded)end
+        if same and encoded==unit then text=decoded
+        else text=native_escape(count==1 and byte or byte*256+unit:byte(2))end
+        cache[unit]=text
+      end
+      out[#out+1]=text;position=position+count
+    end
+    return table.concat(out)
+  end
+end
 local crc_table,nibble_xor
 local function xor32(a,b)
   local out,power=0,1
@@ -59,6 +105,7 @@ do
   end
 end
 function M.install(define,state,options)
+  if options.cp932 then options.cp932=M.native_encoder(options.cp932)end
   local hash_cache,hash_count={},0
   local function crc(text)
     text=cstring(text)

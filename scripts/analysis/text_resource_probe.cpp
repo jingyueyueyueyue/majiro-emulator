@@ -36,6 +36,7 @@ std::vector<fs::path> descriptors;
 std::map<std::string,Entry> members;
 std::set<std::string> names;
 std::map<std::string,std::string> text_snapshot;
+std::map<std::string,std::set<std::string>> text_catalog;
 bool text_snapshot_ready=false;
 majiro::TextSnapshotCache text_bytes;
 size_t file_bytes=0,arc_bytes=0,hash_bytes=0,file_reads=0,arc_reads=0,hash_calls=0;
@@ -283,6 +284,22 @@ int wmain(int argc,wchar_t** argv){
             break;
         }
         need(rejected==2,"stale resource checks failed");
+        // A different archive owner is allowed only when its exact content
+        // was pinned before launch. Unknown owners and modified bytes still fail.
+        int alternatives=0;
+        for(const auto& name:names){
+            majiro::TextSource source;auto bytes=read_member(name,&source);
+            source.path+=".verified-alternate";
+            text_catalog[name].insert(majiro::text_resource_stamp(source,hash(bytes)));
+            verify_text_resource(name,bytes,source);++alternatives;
+            if(!bytes.empty()){
+                bytes.back()^=1;
+                try{verify_text_resource(name,bytes,source);}
+                catch(const std::exception&){++alternatives;}
+                need(alternatives==2,"changed verified alternative was accepted");
+            }
+            break;
+        }
         std::cout<<"{\"status\":\"passed\",\"binary_hash_cases\":"<<binary_hash_inputs.size()
           <<",\"scripts\":"<<parsed_scripts<<",\"resources\":"<<text_snapshot.size()
           <<",\"executed_replacements\":"<<executed<<",\"adapter_scripts\":"<<anchors

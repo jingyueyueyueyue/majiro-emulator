@@ -361,7 +361,9 @@ function VM:begin(name)
   local script=self:load(name)
   self.entry_script=script.name
   local init
-  for _,fn in ipairs(script.functions) do if fn[1]==2981858012 then init=fn[2] end end
+  for _,fn in ipairs(script.functions)do
+    if fn[1]==2981858012 then init=fn[2];break end
+  end
   self.status='running'
   if init then
     self:enter(script,init,{},false,{kind='after_init',script=script.name})
@@ -606,20 +608,25 @@ function VM:slot(flags,hash,offset,element)
     local array=bank[key]
     if type(array)~='table' or array.kind~='array' then self:fail('array variable required') end
     local dimensions=math.floor(flags/2048)%4
-    if dimensions==0 or #array.dims~=dimensions then self:fail('array dimensionality mismatch') end
+    local shape=array.dims
+    if array.native_dimensions and #shape==3 and dimensions>0 then
+      shape={}
+      for i=1,dimensions do shape[i]=array.dims[3-dimensions+i]end
+    end
+    if dimensions==0 or #shape~=dimensions then self:fail('array dimensionality mismatch') end
     local indices={}
     for i=dimensions,1,-1 do indices[i]=self:pop() end
     local flat=0
     for i=1,dimensions do
       local index=indices[i]
       if type(index)~='number' or index%1~=0 then self:fail('nonintegral array index')end
-      if array.dims[i]<=0 then self:fail('array dimension is empty')end
+      if shape[i]<=0 then self:fail('array dimension is empty')end
       -- Original 0x43A590 wraps every coordinate by its dimension, adding
       -- the dimension for negative remainders. -1 addresses the last item.
-      index=index%array.dims[i]
+      index=index%shape[i]
       if self.array_3d_legacy_stride and dimensions==3 then
-        flat=flat+index*(i==1 and array.dims[2]or i==2 and array.dims[3]or 1)
-      else flat=flat*array.dims[i]+index end
+        flat=flat+index*(i==1 and shape[2]or i==2 and shape[3]or 1)
+      else flat=flat*shape[i]+index end
     end
     bank,key,vartype=array.values,flat,array.element_type
     if bank[key]==nil then bank[key]=default(vartype) end

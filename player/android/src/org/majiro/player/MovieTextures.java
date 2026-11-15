@@ -33,10 +33,35 @@ public final class MovieTextures {
 
     public static int play(Context context, Uri uri, boolean loop,
                                          long from, long to, int volume) throws Exception {
+        return play(context,uri,loop,from,to,volume,from);
+    }
+    public static int play(Context context, Uri uri, boolean loop,
+                                         long from, long to, int volume,long position) throws Exception {
         if (from < 0 || (to >= 0 && to <= from))
             throw new IllegalArgumentException("invalid movie range");
         Session next = new Session(context, uri, loop, from, to, volume);
+        if(position<from||(to>=0&&position>=to))throw new IllegalArgumentException("invalid movie resume position");
+        next.initialPosition=position;
         return sessions.play(next)?1:0;
+    }
+    public static long position() throws Exception {
+        final Session current=sessions.current();
+        if(current==null)return 0;
+        current.check();
+        final CountDownLatch completed=new CountDownLatch(1);
+        final long[] value={current.initialPosition};
+        final Exception[] failure={null};
+        Handler handler=current.handler;
+        if(handler==null)return value[0];
+        if(!handler.post(()->{
+            try{if(!current.closed&&current.player!=null&&current.prepared)
+                value[0]=current.player.getCurrentPosition();}
+            catch(RuntimeException error){failure[0]=error;}
+            finally{completed.countDown();}
+        }))throw new IOException("movie position owner closed");
+        if(!completed.await(5000,TimeUnit.MILLISECONDS))throw new IOException("movie position query timed out");
+        if(failure[0]!=null)throw failure[0];
+        return Math.max(0,value[0]);
     }
     public static int status() throws Exception {
         Session current=sessions.current();
@@ -84,7 +109,7 @@ public final class MovieTextures {
         volatile int[] pixels;
         volatile boolean closed, finished, suspended;
         volatile String error;
-        long end;
+        long end,initialPosition;
         boolean seeking, prepared;
         ByteBuffer rgba;
         final float[] transform = new float[16];
@@ -94,6 +119,7 @@ public final class MovieTextures {
         Session(Context context, Uri uri, boolean repeat, long from, long to, int gain) {
             this.context=context; this.uri=uri; this.repeat=repeat;
             this.from=from; this.requestedEnd=to; this.gain=gain;
+            this.initialPosition=from;
             quad.put(new float[]{-1,-1,0,0, 1,-1,1,0, -1,1,0,1, 1,1,1,1}).position(0);
         }
         void check() throws IOException { if (error != null) throw new IOException(error); }
@@ -121,10 +147,12 @@ public final class MovieTextures {
                             try {
                                 long duration=owner.getDuration();
                                 end=requestedEnd<0?duration:Math.min(requestedEnd,duration);
-                                if(duration<=0 || from>=end)throw new IOException("movie range outside duration");
+                                if(duration<=0 || from>=end || initialPosition>=end)
+                                    throw new IOException("movie range outside duration");
                                 resize(owner.getVideoWidth(),owner.getVideoHeight());
                                 prepared=true;
-                                if(from>0)seekStart();else if(!suspended)owner.start();
+                                if(initialPosition>0){seeking=true;owner.seekTo(initialPosition);}
+                                else if(!suspended)owner.start();
                                 handler.post(rangePoll);
                             } catch(Exception failure) { fail("movie prepare: "+failure); }
                         }

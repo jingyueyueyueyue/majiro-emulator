@@ -96,6 +96,9 @@ class Startup:
         self.translation_submits=0
         self.text_snapshot={};self.text_sealed=False;self.text_identity=None
         self.vm_encoding=self.manifest.get("vm_encoding","cp932")
+        self.picture_password=None
+        self.text_catalog={}
+        self.archive_text_identity={}
         self._index()
 
     def _index(self):
@@ -108,6 +111,17 @@ class Startup:
             self.archive_rows.append((name,Archive(self.files[name])))
         self.active_archives=list(self.archive_rows)
         self._refresh()
+        for name,archive in self.archive_rows:
+            inventory=[]
+            if key(name)not in self.image_only_archives:
+                for member in archive.members:
+                    normalized=key(member.name)
+                    if member.extension not in(".mjo",".cfg",".env",".txt"):continue
+                    digest=hashlib.sha256(member.read()).hexdigest()
+                    inventory.append(normalized+"\n"+digest+"\n")
+                    stamp=self.archive_scopes.get(key(name),"original")+"\n"+name+"/"+normalized+"\n"+digest
+                    self.text_catalog.setdefault(normalized,set()).add(stamp)
+            self.archive_text_identity[key(name)]=hashlib.sha256("".join(inventory).encode()).hexdigest()
         recognized={".mjo",".cfg",".env",".png",".rct",".rc8",".wav",".ogg",".wma",".dat",".txt"}
         for name,path in self.files.items():
             if "/"not in name and path.suffix.lower()in recognized:
@@ -170,7 +184,36 @@ class Startup:
         self._refresh();self.resources.update(self.loose);self._overlays()
         self.image_cache.clear();self.audio_cache.clear()
         self.decoded_images.clear()
+        if hasattr(self,"decoded_paths"):self.decoded_paths.clear()
         return 0
+
+    def archive_state(self,action,packet=None):
+        if action=="snapshot":
+            active={key(name)for name,_ in self.active_archives}
+            order=list(self.active_archives)+[row for row in self.archive_rows if key(row[0])not in active]
+            return self.lua.table_from([{"name":name,"active":key(name)in active,
+                "text_identity":self.archive_text_identity.get(key(name),"")}for name,_ in order],recursive=True)
+        rows=list(packet.values())
+        by_name={key(name):(name,archive)for name,archive in self.archive_rows}
+        names=[key(row["name"])for row in rows]
+        if len(set(names))!=len(names)or any(name not in by_name for name in names):
+            raise ValueError("invalid saved archive inventory")
+        for row in rows:
+            identity=row["text_identity"]
+            if identity and identity!=self.archive_text_identity.get(key(row["name"])):
+                raise ValueError("saved archive text content changed")
+        if action=="restore":
+            self.active_archives=[by_name[key(row["name"])]for row in rows if row["active"]]
+            self._refresh();self.resources.update(self.loose);self._overlays()
+            self.image_cache.clear();self.audio_cache.clear();self.decoded_images.clear()
+            if hasattr(self,"decoded_paths"):self.decoded_paths.clear()
+        elif action!="validate":raise ValueError("unknown archive checkpoint action")
+        return 0
+
+    def picture_key(self,value):
+        self.picture_password=value
+        self.image_cache.clear();self.decoded_images.clear()
+        if hasattr(self,"decoded_paths"):self.decoded_paths.clear()
 
     def module(self,path):
         actual=ROOT/("player/"+path if path.startswith("runtime/")else"player/tables/"+Path(path).name)
@@ -202,9 +245,11 @@ class Startup:
             stamp=item.scope+"\n"+item.source_path+"\n"+sha
             normalized=key(name)
             if self.text_sealed or normalized in self.text_snapshot:
-                if self.text_snapshot.get(normalized)!=stamp:raise ValueError("text resource changed after preflight: "+name)
+                if self.text_snapshot.get(normalized)!=stamp and stamp not in self.text_catalog.get(normalized,set()):
+                    raise ValueError("text resource changed after preflight: "+name)
             self.lua.globals()["PLAYER_VERIFY_TEXT_RESOURCE"](normalized,sha,item.scope,item.source_path)
             self.text_snapshot[normalized]=stamp
+            if not self.text_sealed:self.text_catalog.setdefault(normalized,set()).add(stamp)
         if getattr(item,"pinned",False):
             expected=next((m.sha256 for m in self.patch.members if key(m.name)==key(name)),None)
             if hashlib.sha256(raw).hexdigest()!=expected:raise ValueError("raw patch source hash changed: "+name)
@@ -428,7 +473,7 @@ class Startup:
                         if key(candidate)in owner.resources:return owner.resource(candidate)
                     raise ValueError("source image missing: "+name)
             decoder=Decoder(CatalogueView())
-            password=self.system["state"]["picture_key"]if self.system else None
+            password=self.picture_password
             if password:decoder.encryption_key=image_key(password.encode("cp932"))
             image,_=decoder.pixels(name);dimensions=image.size
             if alpha and name.endswith(".rct"):
@@ -490,6 +535,9 @@ class Startup:
         self.counts["platform:"+action]+=1
         if action=="fullscreen_mode":return self.lua.table_from([max(1280,args[1]),max(720,args[2])])
         if action in("caps_get","caps_set","display_scale","cursor_move","service_events"):return 0
+        if action=="cursor_visible":
+            self.cursor_visible=args[1]!=0
+            return 0
         raise RuntimeError("unmodeled platform action: "+action)
 
     def service(self,action,value):
@@ -527,6 +575,7 @@ class Startup:
             initial_hashes[name]=sha256(ROOT/"player/runtime"/name)
         host=self.lua.table()
         callbacks={"asset_text":self.module,"game_text":self.game_text,"resource_text":self.resource_text,
+            "archive_state":self.archive_state,"picture_key":self.picture_key,
             "text_mode":lambda:self.mode,"patch_configuration":lambda:json.dumps(dict(self.manifest,legacy=False,
                 raw_metadata=self.manifest.get("raw_metadata",""),text_adapter=self.manifest.get("text_adapter",{}))),
             "identity":self.identity,

@@ -78,12 +78,15 @@ local options={
   modules=module,now=function()return clock end,
   asset=HOST.image_asset,media_asset=HOST.media_asset,
   graphics=HOST.graphics,audio=HOST.audio,movie=HOST.movie,dialog=HOST.dialog,
+  movie_position=HOST.movie_position,
+  picture_key=HOST.picture_key,
   debug_output=HOST.debug_output,load_font=HOST.load_font,
   wallpaper=HOST.wallpaper,change_cursor=HOST.change_cursor,
   resize_window=HOST.resize_window,
   font_filter=HOST.font_filter,
   cp932=HOST.cp932,font_face='sans-serif',font_dialog=HOST.font_dialog,
   decode_bytes=HOST.decode_bytes,service=HOST.service,
+  native_decode_bytes=HOST.decode_bytes,native_cp932=HOST.cp932,
   screen_mode=HOST.screen_mode,source_identity=identity,
   compatible_save_identity=compatibility.accepts,
   screen_fit=HOST.screen_fit,
@@ -94,6 +97,9 @@ local options={
   store=store,set_clock=function(value)clock=value;HOST.set_clock(value)end,
   wait_for_present=function()return true end,
 }
+options.cursor=function(visible)
+  assert(HOST.platform('cursor_visible',{visible and 1 or 0})~=false,'cursor visibility rejected')
+end
 if text_patch then
   options.cp932=text_patch.bytes
   options.font_face=text_patch.font_face
@@ -107,9 +113,7 @@ if vm_encoding~='cp932'and not text_patch and not raw_patch then
   options.cp932=function(text)return HOST.encode_text(text,vm_encoding)end
   options.decode_bytes=function(bytes)return HOST.decode_text(bytes,vm_encoding)end
 end
-options.archive=function(action,name)
-  local result=HOST.archive_control(action,name)
-  assert(result==0,'dynamic archive host operation failed')
+local function refresh_archive_resources()
   local names={}
   local metadata={}
   for _,member in ipairs(HOST.member_names())do
@@ -121,7 +125,22 @@ options.archive=function(action,name)
   options.resource_names=names
   options.image_metadata=metadata
   options.source_generation=(options.source_generation or 0)+1
+end
+options.archive=function(action,name)
+  local result=HOST.archive_control(action,name)
+  assert(result==0,'dynamic archive host operation failed')
+  refresh_archive_resources()
   return result
+end
+if HOST.archive_state then
+  options.archive_state=function(action,packet)
+    local result=HOST.archive_state(action,packet)
+    if action=='restore'then
+      assert(result==0,'archive checkpoint restore failed')
+      refresh_archive_resources()
+    end
+    return result
+  end
 end
 if raw_patch then
   assert(not text_patch,'conflicting raw translation patch adapters')
@@ -166,6 +185,23 @@ vm=module('runtime/majiro_vm.lua').new{
   wall_deadline=system.wall_deadline,string_ops=system.strings,text_ops=system.text,
   line_changed=system.line_changed,
 }
+options.native_present=function()
+  if not system.state.frontbuffer then return end
+  local rows={}
+  system.sprites.update()
+  for _,id in ipairs(system.state.sprite_order)do
+    local sprite=system.state.sprites[id]
+    if sprite and sprite.destination==system.state.frontbuffer and sprite.anti<255
+      and(sprite.hidden or 0)==0 then
+      rows[#rows+1]=string.format('%d %d %d %d %d %.8g %.8g %.8g %.8g %.8g %d %d',
+        sprite.page,sprite.sx,sprite.sy,sprite.width,sprite.height,sprite.x,sprite.y,
+        sprite.xscale,sprite.yscale,sprite.rotate,sprite.anti,sprite.extended and 1 or 0)
+    end
+  end
+  local reply=HOST.graphics(system.screen.present(system.state.frontbuffer,'screen',table.concat(rows,'\n')))
+  assert(type(reply)=='string'and reply:sub(1,2)=='OK','native scene composition failed')
+  system.presented(system.state.present_requested)
+end
 vm:begin('start.mjo')
 function PLAYER_SIZE()return configuration.width,configuration.height end
 function PLAYER_TICK(now,event)

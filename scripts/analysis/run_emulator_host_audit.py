@@ -34,6 +34,11 @@ CASES = [
     "test_host_load_journal_work",
     "test_host_restore_combinations",
     "test_media_cache_recovery",
+    "test_movie_checkpoint",
+    "test_archive_checkpoint",
+    "test_save_versions",
+    "test_historical_gameplay_saves",
+    "test_native_frame_resume", "test_native_story_resume", "test_native_string_bytes",
 ]
 
 

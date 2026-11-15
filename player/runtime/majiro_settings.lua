@@ -21,7 +21,8 @@ function M.install(define,state,options)
   define(0xf66cd6ea,function(vm,args)
     assert(#args==0)
     if not options.service then vm:fail('system locale host unavailable')end
-    return assert(tonumber(options.service('system_lcid','')),'invalid system locale result')
+    local value=assert(tonumber(options.service('system_lcid','')),'invalid system locale result')
+    return value
   end)
   define('$joy_is_enable',function(vm,args)assert(#args==0);return tonumber(state.registry.joyuse)or 0 end)
   define('$joy_set_enable',function(vm,args)

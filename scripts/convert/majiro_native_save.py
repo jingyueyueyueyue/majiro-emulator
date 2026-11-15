@@ -13,7 +13,7 @@ from pathlib import Path
 import struct
 
 SYSTEM_SIGNATURE = b"MajiroSysV1.100\0"
-STORY_SIGNATURES = (b"MajiroSavV1.103\0", b"MajiroSavV1.105\0")
+STORY_SIGNATURES = (b"MajiroSavV1.102\0", b"MajiroSavV1.103\0", b"MajiroSavV1.104\0", b"MajiroSavV1.105\0")
 SYSTEM_HEADER = 0x9C58
 READMARK_HEADER = 0x94
 MAX_FILE_BYTES = 64 * 1024 * 1024

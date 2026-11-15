@@ -44,6 +44,11 @@ int movie_command(const std::string&op,const std::string&,int,bool,jlong,jlong){
  calls.push_back("java:"+op);if(op=="stop"&&fail_stop)throw std::runtime_error("decoder cleanup failed");
  return op=="stop"?0:1;
 }
+int movie_restore_command(const std::string&op,const std::string&path,int volume,bool loop,
+                          jlong from,jlong to,jlong position){
+ calls.push_back("seek:"+std::to_string(position));
+ return movie_command(op,path,volume,loop,from,to);
+}
 void refresh_movie_frame(){calls.push_back("frame");}
 // METHOD
 void active(){
@@ -57,6 +62,9 @@ int main(){
  state.action="texture_play";state.numbers["page_hint"]=55;calls.clear();movie(&state);
  assert(calls==std::vector<std::string>({"java:texture_play","frame"}));
  assert(movie_page==55&&movie_texture_mode);
+ state.numbers["resume_position_ms"]=375;calls.clear();movie(&state);
+ assert(calls==std::vector<std::string>({"release 55","seek:375","java:texture_play","frame"}));
+ state.numbers.erase("resume_position_ms");
  active();state.action="texture_stop";movie(&state);
  assert(calls==std::vector<std::string>({"java:texture_stop","release 55"}));
  active();state.action="checkpoint_detach";fail_stop=true;

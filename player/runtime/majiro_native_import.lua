@@ -15,16 +15,25 @@ end
 local function real(bits)
   local sign=bits>=2147483648 and-1 or 1;bits=bits%2147483648
   local exponent=math.floor(bits/8388608);local fraction=bits%8388608
-  assert(exponent~=255,'nonfinite original number cannot enter portable checkpoint')
+    if exponent==255 then return fraction==0 and sign*math.huge or 0/0 end
   if exponent==0 then return sign*math.ldexp(fraction,-149)end
   return sign*math.ldexp(1+fraction/8388608,exponent-127)
 end
 function M.new(options)
   local codec=options.modules('runtime/majiro_codec.lua')
   local objects={}
+  local decode_native
   local function decode(raw)
     assert(options.decode_bytes,'native import byte decoder unavailable')
     return options.decode_bytes(raw)
+  end
+  local function decode_value(raw)
+    if not decode_native then
+      decode_native=options.modules('runtime/majiro_strings.lua').native_decoder(
+        options.native_decode_bytes or options.decode_bytes,
+        assert(options.native_cp932 or options.cp932,'native import byte encoder unavailable'))
+    end
+    return decode_native(raw)
   end
   local function value(row)
     local tag=integer(row.native_type,'native value tag missing')
@@ -34,12 +43,12 @@ function M.new(options)
     local key=object.object_offset
     if key and objects[key]then return objects[key],tag end
     if tag==2 then
-      local text=decode(unhex(object.bytes_hex))
+      local text=decode_value(unhex(object.bytes_hex))
       if key then objects[key]=text end
       return text,2
     end
     assert(tag>=3 and tag<=5 and type(object.dimensions)=='table','native array invalid')
-    local array={kind='array',element_type=tag-3,dims={},values={}}
+    local array={kind='array',element_type=tag-3,dims={},native_dimensions=true,values={}}
     if key then objects[key]=array end
     local count=1
     for i,dimension in ipairs(object.dimensions)do
@@ -51,7 +60,7 @@ function M.new(options)
     for i,item in ipairs(object.values)do
       if tag==3 then array.values[i-1]=item
       elseif tag==4 then array.values[i-1]=real(assert(tonumber(item.float32_bits,16)))
-      else array.values[i-1]=decode(unhex(item.bytes_hex))end
+      else array.values[i-1]=decode_value(unhex(item.bytes_hex))end
     end
     return array,tag
   end
@@ -64,9 +73,12 @@ function M.new(options)
   local function validate_neutral(native)
     local header=unhex(native.header_bytes_hex)
     local c=native.count_fields_offset
-    assert(native.format=='MajiroSavV1.103'or native.format=='MajiroSavV1.105','native story signature unsupported')
-    assert((native.format=='MajiroSavV1.103'and c==0x90 and #header==0xa3e0)
-      or(native.format=='MajiroSavV1.105'and c==0x210 and #header==0xa560),'native story profile mismatch')
+    assert(native.format=='MajiroSavV1.102'or native.format=='MajiroSavV1.103'or native.format=='MajiroSavV1.104'
+      or native.format=='MajiroSavV1.105','native story signature unsupported')
+    assert((native.format=='MajiroSavV1.102'and c==0x90 and #header==0x9fd0)
+      or(native.format=='MajiroSavV1.103'and c==0x90 and #header==0xa3e0)
+      or((native.format=='MajiroSavV1.104'or native.format=='MajiroSavV1.105')
+        and c==0x210 and #header==0xa560),'native story profile mismatch')
     -- The only currently proven import state is an idle, fully neutral scene.
     -- No media/graphics/window/console field is synthesized or ignored.
     local begin=c+28
@@ -75,7 +87,7 @@ function M.new(options)
     assert(header:sub(begin+1,finish):gsub('%z','')=='',
       'native scene/media header requires an unimplemented restore adapter')
     assert(header:sub(finish+1):gsub('%z','')=='',
-      'native picture progress hashes require a verified resource-name mapping')
+      'native text/history state requires scene reconstruction')
     return header
   end
   local api={}
@@ -87,6 +99,11 @@ function M.new(options)
     assert(digest(manifest.save_sha256),'native import save digest missing')
     assert(native.source_sha256==manifest.save_sha256,'native import input bytes do not match verified save')
     assert(manifest.verified_same_script_version==true,'native save version has not been verified')
+    if manifest.restore_kind=='native_story'then
+      objects={}
+      return options.modules('runtime/majiro_native_state.lua').plan(native,manifest,baseline,live_vm,
+        options,decode,value,function()objects={}end,system_native,readmarks_native)
+    end
     validate_neutral(native)
     assert(#native.frames==1 and native.frame_depth==0,'nested native frames need parameter/local mapping')
     assert(type(baseline)=='table'and type(baseline.state)=='table','native baseline unavailable')

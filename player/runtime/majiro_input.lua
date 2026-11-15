@@ -166,7 +166,7 @@ function M.install(define,state,options,screen)
     local calls={}
     for _,callback in ipairs(callbacks)do
       local script=assert(vm.scripts[callback.script]);local offset
-      for _,fn in ipairs(script.functions)do if fn[1]==callback.hash then offset=fn[2]end end
+      for _,fn in ipairs(script.functions)do if fn[1]==callback.hash then offset=fn[2];break end end
       if not offset then vm:fail('area callback not present')end
       calls[#calls+1]={script=script.name,offset=offset,args=callback.args}
     end

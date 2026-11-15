@@ -166,6 +166,27 @@ def run():
                 assert pixels(command)=="OK",command
         assert before==[pixels(f"pixel 2 {x} 0")for x in range(4)]
     check("signed_coordinate_extremes",extreme_clip)
+    def large_scale(scale,mirror):
+        for command in ("reset","create 1 1 1 0","fill 1 0 0 1 1 197121",
+                        "create 2 4 4 0"):
+            assert pixels(command)=="OK"
+        x=4 if mirror else 0
+        xs=-scale if mirror else scale
+        row=f"1 0 0 1 1 {x} 0 {xs} {scale} 0 0 0"
+        assert pixels("paste 2 "+row)=="OK"
+        wanted=bytes((1,2,3,255))*16
+        for y in range(4):
+            for x_ in range(4):assert pixels(f"pixel 2 {x_} {y}")=="OK 1 2 3 255"
+        output=folder/"large_scale.png"
+        assert native(f"present 2 {output}\n"+row).startswith("OK")
+        assert Image.open(output).convert("RGBA").tobytes()==wanted
+        reply,actual=portable("present 2 screen\n"+row)
+        assert reply.startswith("OK")and actual==wanted
+        assert pixels(f"modify 1 0 0 1 1 2 0 0 4 4 0 {scale} {scale}")=="OK"
+        return {"scale":scale,"mirror":mirror,"native_and_portable_pixels_match":True}
+    for scale in(129,1024,1e20,3.4028234663852886e38):
+        for mirror in(False,True):
+            check(f"large_scale_{scale}_{mirror}",lambda s=scale,m=mirror:large_scale(s,m))
     portable.close()
     report = {"status": "failed" if failures else "passed", "timestamp": timestamp(),
               "runtime": "player/runtime/majiro_graphics_checkpoint.lua",

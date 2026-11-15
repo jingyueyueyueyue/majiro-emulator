@@ -15,6 +15,7 @@ from run_player_semantics import SUITES as SEMANTIC_SUITES
 from run_emulator_host_audit import CASES as HOST_SUITES
 
 EXTRA_SUITES = (
+    "test_init_lookup",
     "test_formats", "test_player_core", "test_player_images", "test_vm",
     "test_branch4", "test_array_indices", "test_script_filename_aliases",
     "test_event_dispatch_semantics", "test_cross_thread_events",

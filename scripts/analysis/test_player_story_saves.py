@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import struct
 import subprocess
@@ -38,8 +39,8 @@ def fixtures():
 
 
 def malformed(raw):
-    fields = 0x90 if raw[:16] == b"MajiroSavV1.103\0" else 0x210
-    header = 0xA3E0 if fields == 0x90 else 0xA560
+    from majiro_story_save import PROFILES
+    header,fields,_=PROFILES[raw[:16]]
     parsed = parse_story_save(raw)
     thumb_bytes = len(bytes.fromhex(parsed["thumbnail"]["bytes_hex"]))
     frame_start = header + thumb_bytes
@@ -135,7 +136,8 @@ def main():
             assert json.loads(process.stdout) == reference, (name, mode)
             probes += 1
         assert hashlib.sha256(path.read_bytes()).hexdigest() == sha
-        cases.append({"name": name, "file": str(path.relative_to(ROOT)), "sha256": sha,
+        cases.append({"name": name, "file": str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path),
+                      "sha256": sha,
                       "format": reference["format"], "bytes": len(raw), "status": "passed",
                       "provenance": provenance, "frame_count": len(reference["frames"]),
                       "value_counts": [group["common_value_view"]["variable_count"]
@@ -146,6 +148,38 @@ def main():
     for name, path, sha in originals:
         raw = compare(name, path, sha)
         first_of_version.setdefault(raw[:16], raw)
+    from port_common import read_json
+    game = next(g for g in read_json(ROOT / "config/player_new_samples.json")["games"]
+                if g["id"] == "kiraoto")
+    real_slot = Path(game["directory"]) / "savedata/majiro_0101.sav"
+    if not real_slot.is_file():
+        raise FileNotFoundError("original V1.104 gameplay fixture unavailable")
+    raw = compare("kiraoto_original_104", real_slot, provenance="read_only_native_gameplay_save")
+    assert raw[:16] == b"MajiroSavV1.104\0"
+    first_of_version.setdefault(raw[:16], raw)
+    from original_story_102 import EarlyStoryWriter
+    samples=read_json(ROOT/"reports/opcode_dispatch.json")["samples"]
+    signature_inventory=[]
+    for item in samples:
+        data=Path(item["path"]).read_bytes()
+        assert hashlib.sha256(data).hexdigest()==item["exe_sha256"]
+        formats=sorted(set(m.decode("ascii")for m in re.findall(rb"MajiroSavV\d\.\d{3}",data)))
+        systems=sorted(set(m.decode("ascii")for m in re.findall(rb"MajiroSysV\d\.\d{3}",data)))
+        assert len(formats)==1 and (formats[0]+"\0").encode()in __import__(
+            "majiro_story_save").PROFILES,(item["sample"],formats)
+        assert systems==["MajiroSysV1.100"],(item["sample"],systems)
+        signature_inventory.append({"game":item["sample"],"exe_sha256":item["exe_sha256"],
+                                    "story":formats[0],"system":systems[0]})
+    assert len(signature_inventory)==17
+    sample=next(s for s in samples if s["sample"]=="kizoku")
+    for depth in (0,1):
+        for thumbnail in (False,True):
+            writer=EarlyStoryWriter(sample);writer.fixture(depth,thumbnail)
+            path=evidence/f"original_102_depth{depth}_thumbnail{int(thumbnail)}.sav"
+            path.write_bytes(writer.capture_and_write())
+            raw=compare("kizoku_102_"+str(depth)+"_"+str(thumbnail),path,
+                        provenance="original_v102_writer")
+            first_of_version.setdefault(raw[:16],raw)
     for raw in first_of_version.values():
         fmt = raw[:15].decode("ascii")
         all_types = common_type_fixture(raw)
@@ -184,14 +218,12 @@ def main():
               "source_changed_during_test": False, "original_writer_manifest_sha256": hashlib.sha256(
                   (ROOT / "reports/story_save_layout_tests.json").read_bytes()).hexdigest(),
               "cases": cases, "negative_cases": negatives, "probe_checks": probes,
+              "original_engine_save_signatures":signature_inventory,
               "android_compile": android, "evidence": str(evidence.relative_to(ROOT)),
-              "native_story_restore_supported": False, "runtime_import_integrated": False,
-              "script_identity_verified": False, "device_tests_executed": False,
-              "scope": "V1.103/V1.105 raw header/frame/thumbnail/value/pool parity, aliases and requirements",
-              "limitations": ["No native gameplay saves; 12 inputs come from bounded original x86 writers.",
-                              "Unknown resource header bytes remain opaque.",
-                              "Script requirements are unverified inputs to future identity/boundary validation.",
-                              "No Android VM importer or partial restore API exists."]}
+              "device_tests_executed": False,
+              "scope": "V1.102/V1.103/V1.104/V1.105 raw header/frame/thumbnail/value/pool parity, aliases and requirements",
+              "scope_note": "Parser parity is exercised here; source-bound VM continuation, scene rebuilding "
+                            "and rollback are exercised by test_native_frame_resume and test_native_story_resume."}
     write_json(ROOT / "reports/player_story_save_tests.json", report)
     write_json(evidence / "20261110_player_story_save_tests.json", report)
     print(f"portable story parser: {len(cases)} inputs, {len(negatives)} rejection cases, "

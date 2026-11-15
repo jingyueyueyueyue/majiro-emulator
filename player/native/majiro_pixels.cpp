@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 #include "../core/screen_view.hpp"
+#include "../core/page_checkpoint.hpp"
 using Microsoft::WRL::ComPtr;
 struct Page {
     int w=0,h=0;
@@ -533,6 +534,25 @@ static std::string run(const std::string& request) {
     if(op=="create"){int id,w,h,a;require(bool(in>>id>>w>>h>>a),"create arguments");
         int depth=32;in>>depth;require(depth==8||depth==32,"invalid pixel depth");
         auto p=allocate(w,h,a!=0);p.depth=depth;put(id,std::move(p));return "OK";}
+    if(op=="checkpoint_export")return majiro::checkpoint::export_pages(pages);
+    if(op=="page_state"){
+        int id,w,h,depth,mode,mask,owned,released,alpha;std::string palette;
+        require(bool(in>>id>>w>>h>>depth>>mode>>mask>>owned>>released>>alpha>>palette),
+                "checkpoint page arguments");
+        require((depth==8||depth==32)&&mode>=0&&mode<=4&&mask>=0&&owned>=0&&owned<=1&&
+            released>=0&&released<=1&&alpha>=0&&alpha<=1&&palette.size()==2048&&
+            (!owned||mask>0)&&(!mask||depth==32),
+            "invalid checkpoint page metadata");
+        auto p=allocate(w,h,alpha!=0);p.depth=depth;p.drawmode=mode;p.antidata=mask;
+        p.owns_alpha=owned!=0;p.release_requested=released!=0;
+        size_t at=0;for(auto& color:p.palette)color=majiro::checkpoint::unhex(palette,at);
+        put(id,std::move(p));return "OK";
+    }
+    if(op=="page_pixels"){
+        int id;size_t offset;std::string data;
+        require(bool(in>>id>>offset>>data),"checkpoint pixel arguments");
+        majiro::checkpoint::restore_pixels(get(id),offset,data);return "OK";
+    }
     if(op=="checkpoint_begin"){
         require(!checkpoint_active,"nested graphics checkpoint transaction");
         // Page vectors, palettes, alpha associations and pending releases
@@ -545,7 +565,26 @@ static std::string run(const std::string& request) {
     }
     if(op=="checkpoint_commit"){
         require(checkpoint_active,"graphics checkpoint transaction missing");
+        for(const auto& entry:pages)if(entry.second.antidata){
+            const auto& p=entry.second;const auto& mask=get(p.antidata);
+            require(entry.first!=p.antidata&&mask.depth==8&&p.w==mask.w&&p.h==mask.h,
+                    "invalid checkpoint alpha association");
+        }
         checkpoint_pages.clear();checkpoint_active=false;return "OK";
+    }
+    if(op=="frame"){
+        int id;require(bool(in>>id)&&id>0,"movie frame arguments");
+        auto p=load(path_arg(in),false);
+        auto found=pages.find(id);
+        if(found!=pages.end()){
+            require(found->second.depth==32,"movie frame page must be true color");
+            p.drawmode=found->second.drawmode;p.antidata=found->second.antidata;
+            p.owns_alpha=found->second.owns_alpha;
+            if(p.antidata){const auto& mask=get(p.antidata);
+                require(mask.w==p.w&&mask.h==p.h,"movie frame alpha dimensions changed");}
+            found->second=std::move(p);
+        }else put(id,std::move(p));
+        return "OK";
     }
     if(op=="load"||op=="load8"){int id,a;require(bool(in>>id>>a),"load arguments");
         put(id,load(path_arg(in),a!=0,op=="load8"));return "OK";}
@@ -1196,8 +1235,8 @@ static std::string run(const std::string& request) {
         int source,sx,sy,sw,sh,dest,dx,dy,dw,dh;double angle,xs,ys;
         require(bool(in>>source>>sx>>sy>>sw>>sh>>dest>>dx>>dy>>dw>>dh>>angle>>xs>>ys),
             "modify arguments");
-        require(std::isfinite(angle)&&std::isfinite(xs)&&std::isfinite(ys)&&std::abs(xs)<=128&&
-            std::abs(ys)<=128&&dw>=0&&dh>=0&&dw<=32768&&dh<=32768,"modify bounds");
+        require(std::isfinite(angle)&&std::isfinite(xs)&&std::isfinite(ys)&&std::abs(xs)<=3.4028234663852886e38&&
+            std::abs(ys)<=3.4028234663852886e38&&dw>=0&&dh>=0&&dw<=32768&&dh<=32768,"modify bounds");
         const Page frozen=get(source);
         composite(get(dest),frozen,sx,sy,sw,sh,dx+dw/2.0,dy+dh/2.0,xs,ys,angle,0,true,true,
             dx,dy,dw,dh);
@@ -1208,7 +1247,7 @@ static std::string run(const std::string& request) {
         require(bool(in>>dest>>page>>sx>>sy>>w>>h>>x>>y>>xs>>ys>>angle>>anti>>centered),
             "paste sprite arguments");
         require(std::isfinite(x)&&std::isfinite(y)&&std::isfinite(xs)&&std::isfinite(ys)&&
-            std::isfinite(angle)&&std::abs(xs)<=128&&std::abs(ys)<=128&&anti>=0&&anti<=255,
+            std::isfinite(angle)&&std::abs(xs)<=3.4028234663852886e38&&std::abs(ys)<=3.4028234663852886e38&&anti>=0&&anti<=255,
             "paste geometry bounds");
         const Page source=get(page); // freeze source if pasting into its own page
         composite(get(dest),source,sx,sy,w,h,x,y,xs,ys,angle,anti,centered!=0);
@@ -1229,8 +1268,11 @@ static std::string run(const std::string& request) {
             std::istringstream item(row);
             int page,sx,sy,w,h,anti,centered;double x,y,xs,ys,angle;
             require(bool(item>>page>>sx>>sy>>w>>h>>x>>y>>xs>>ys>>angle>>anti>>centered),"render sprite row");
+            // Source transforms are float32, not capped at 128x. Inverse
+            // sampling already clips work to the destination framebuffer.
             require(std::isfinite(x)&&std::isfinite(y)&&std::isfinite(xs)&&std::isfinite(ys)&&
-                std::isfinite(angle)&&std::abs(xs)<=128&&std::abs(ys)<=128,"render geometry bounds");
+                std::isfinite(angle)&&std::abs(xs)<=3.4028234663852886e38&&
+                std::abs(ys)<=3.4028234663852886e38,"render geometry bounds");
             composite(result,get(page),sx,sy,w,h,x,y,xs,ys,angle,anti,centered!=0,false,
                 0,0,32768,32768,op!="renderref");
         }

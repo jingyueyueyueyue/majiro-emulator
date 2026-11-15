@@ -21,8 +21,8 @@ final class MediaCache {
         return new String(result);
     }
 
-    private static boolean matches(File file, byte[] bytes, byte[] digest) throws Exception {
-        if (!file.isFile() || file.length() != bytes.length) return false;
+    private static boolean matches(File file, long expectedSize, byte[] digest) throws Exception {
+        if (!file.isFile() || file.length() != expectedSize) return false;
         MessageDigest hash = MessageDigest.getInstance("SHA-256");
         try (FileInputStream input = new FileInputStream(file)) {
             byte[] buffer = new byte[32768];
@@ -32,6 +32,17 @@ final class MediaCache {
             return false;
         }
         return MessageDigest.isEqual(digest, hash.digest());
+    }
+
+    /** Validate the native cache hit without reading or extracting the archive. */
+    static synchronized boolean isValid(File file, long expectedSize) throws Exception {
+        String name = file.getName();
+        if (expectedSize < 0 || !name.matches("[0-9a-f]{64}\\.[a-z0-9]{1,8}")) return false;
+        byte[] digest = new byte[32];
+        for (int i = 0; i < digest.length; ++i)
+            digest[i] = (byte)((Character.digit(name.charAt(i * 2), 16) << 4)
+                | Character.digit(name.charAt(i * 2 + 1), 16));
+        return matches(file, expectedSize, digest);
     }
 
     static File materialize(File cacheRoot, String name, byte[] bytes) throws Exception {
@@ -48,7 +59,7 @@ final class MediaCache {
         byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
         String hash = hex(digest);
         File destination = new File(directory, hash + suffix);
-        if (matches(destination, bytes, digest)) return destination;
+        if (matches(destination, bytes.length, digest)) return destination;
         File pending = Files.createTempFile(directory.toPath(), hash + "-", ".writing").toFile();
         try {
             try (FileOutputStream output = new FileOutputStream(pending)) {

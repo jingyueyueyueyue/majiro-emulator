@@ -28,7 +28,8 @@ function M.new(options)
     extcopy=true,swap=true,fill=true,extfill=true,mulfill=true,set=true,sepia=true,alphatable=true,
     text=true,glyphs=true,paste=true,modify=true,thumbnail=true,release=true,drawmode=true,
     reverse=true,revmulcopy=true,mulcopy=true,overlayfill=true,mosaic=true,
-    thumbrect=true,fuchidori=true,tablecopy=true,smoothframe=true}
+    thumbrect=true,fuchidori=true,tablecopy=true,smoothframe=true,
+    page_state=true,page_pixels=true}
   if raw_graphics then options.graphics=function(request)
     local reply=raw_graphics(request)
     if not state.restoring and type(reply)=='string'and reply:sub(1,2)=='OK'and
@@ -140,6 +141,7 @@ function M.new(options)
   end)
   define('$pic_key_set',function(vm,args)
     assert(#args==1 and type(args[1])=='string','pic_key_set signature')
+    if options.picture_key then options.picture_key(args[1])end
     state.picture_key=args[1];return 0
   end)
   for _,entry in ipairs{{'$regist_arcfile','register'},{'$release_arcfile','release'}}do
@@ -356,7 +358,8 @@ function M.new(options)
     define(entry[1],function(vm,args)
       assert(#args==1 and type(args[1])=='table'and args[1].kind=='array'
         and args[1].element_type==element,'dim_copy array signature')
-      local source=args[1];local result={kind='array',element_type=element,dims={},values={}}
+      local source=args[1];local result={kind='array',element_type=element,dims={},values={},
+        native_dimensions=source.native_dimensions}
       for i,value in ipairs(source.dims)do result.dims[i]=value end
       for i,value in pairs(source.values)do result.values[i]=value end
       return result
@@ -595,7 +598,8 @@ function M.new(options)
   define('$grp_point_get',function(vm,args)
     assert(#args==3)
     local reply=graphics(vm,string.format('get %d %d %d',args[1],args[2],args[3]))
-    return assert(tonumber(reply:match('^OK ([-%d]+)')),'point query invalid result')
+    local value=assert(tonumber(reply:match('^OK ([-%d]+)')),'point query invalid result')
+    return value
   end)
   define('$grp_sepia',function(vm,args)
     assert(#args==7 or #args==8,'grp_sepia signature')
@@ -710,14 +714,27 @@ function M.new(options)
     local meta=options.image_metadata
     return meta[key..'.png'] or meta[key..'.bmp'] or meta[key..'.rct'] or meta[key..'.rc8'] or meta[key]
   end
+  local function picture_dimensions(vm,name)
+    local meta=picture(name)
+    if meta then return meta end
+    local key=image_key(name)
+    local stem,extension=key:match('^(.*)%.([^%.]+)$')
+    if stem and({png=true,bmp=true,rct=true,rc8=true})[extension]then key=stem end
+    for _,suffix in ipairs{'.png','.bmp','.rct','.rc8',''}do
+      if(options.resource_names or{})[key..suffix]then
+        vm:fail('picture dimensions missing for an existing resource: '..name)
+      end
+    end
+    -- The native missing-image/cancel path returns a 1x1 dimension, just
+    -- like page_create_file's empty optional page.
+    return{width=1,height=1}
+  end
   define('$pic_len_x',function(vm,args)
-    assert(#args==1);local meta=picture(args[1])
-    if not meta then vm:fail('picture dimensions missing: '..args[1]) end
+    assert(#args==1);local meta=picture_dimensions(vm,args[1])
     return meta.width
   end)
   define('$pic_len_y',function(vm,args)
-    assert(#args==1);local meta=picture(args[1])
-    if not meta then vm:fail('picture dimensions missing: '..args[1]) end
+    assert(#args==1);local meta=picture_dimensions(vm,args[1])
     return meta.height
   end)
   define('$pic_is_exist',function(vm,args)
@@ -1016,7 +1033,8 @@ function M.new(options)
     -- Original 0x450CA0 looks up the same normalized ID as 0x451330.
     assert(#args==1 and type(args[1])=='string')
     local key=args[1]:match('^[^.]*'):lower()
-    return state.progress.pictures[key]and 1 or 0
+    return(state.progress.pictures[key]or
+      (state.progress.native_pictures or{})[strings.hash(key)])and 1 or 0
   end)
   define(0xeb5cc468,function(vm,args)
     -- Original handler 0x451330 records normalized picture IDs in a bounded
@@ -1216,8 +1234,9 @@ function M.new(options)
       if vm.status=='blocked' then error(value,0) end
       vm:fail('syscall '..name..': '..tostring(value))
     end
-    return value,deferred,(name:sub(-1)=='%'or name=='$rand!')and 1 or nil
+    return value,deferred==true or nil,(name:sub(-1)=='%'or name=='$rand!')and 1 or nil
   end
+  options.native_rebuild_step=function(vm)return poll(vm,{buttons=0,held_buttons=0})end
   return {invoke=invoke,state=state,providers=providers,sprites=sprites,emit=emit,
     dispatch_event=dispatch_event,window_menus=window_menus,saves=saves,dialogs=dialogs,
     wall_deadline=wall_deadline,

@@ -14,6 +14,37 @@ BASE = ROOT / "player/runtime"
 FIXED = BASE / "majiro_input.lua"
 
 CASES = {
+    "duplicate_hover_hash_uses_first_source_entry": """
+        setarea(1)
+        script.functions[#script.functions+1]={100,999}
+        poll({x=12,y=13});check()
+        assert(#calls==1 and calls[1].offset==10,'duplicate hover hash selected later entry')
+    """,
+    "duplicate_click_hash_uses_first_source_entry": """
+        setarea(1)
+        script.functions[#script.functions+1]={200,999}
+        poll({x=12,y=13,buttons=1});check()
+        assert(#calls==2 and calls[2].offset==20,'duplicate click hash selected later entry')
+    """,
+    "duplicate_leave_hash_uses_first_source_entry": """
+        setarea(1);thread.areas[1].inside=true
+        script.functions[#script.functions+1]={300,999}
+        poll({x=1000,y=1000});check()
+        assert(#calls==1 and calls[1].offset==30,'duplicate leave hash selected later entry')
+    """,
+    "duplicate_default_hash_uses_first_source_entry": """
+        defaults();script.functions[#script.functions+1]={500,999}
+        poll({buttons=2});check()
+        assert(#calls==1 and calls[1].offset==50,'duplicate default hash selected later entry')
+    """,
+    "duplicate_keyboard_hash_uses_first_source_entry": """
+        script.functions[#script.functions+1]={600,60}
+        script.functions[#script.functions+1]={600,999}
+        call('$areaevent_setdefault',{400,500,0,600})
+        poll({x=12,y=13,pressed={[33]=true}});check()
+        assert(#calls==1 and calls[1].offset==60,'duplicate keyboard hash selected later entry')
+        assert(calls[1].args[1]==12 and calls[1].args[3]==1)
+    """,
     "reset_clears_focus_then_enter": """
         setarea(1);setarea(2);thread.area_focus=2
         call('$areaevent_reset',{})

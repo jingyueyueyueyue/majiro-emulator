@@ -43,6 +43,16 @@ def run():
       local bank,index=v:slot(32+2048*2,7,-1,true)
       return index==10
     """)
+    for row in rows:
+        padded=(1,)*(3-len(row["dimensions"]))+tuple(row["dimensions"])
+        actual=lua.eval("""function(mod,dims,indices)
+          local vm=mod.new{loader=function()end,opcodes={},syscall=function()end}
+          vm.globals[1][7]={kind='array',element_type=0,dims=dims,native_dimensions=true,values={}}
+          for _,index in ipairs(indices)do vm:push(index)end
+          local bank,index=vm:slot(32+2048*#indices,7,-1,true)
+          return index
+        end""")(module,lua.table_from(padded),lua.table_from(row["indices"]))
+        assert actual==row["flat"],(row,actual)
     report={"status":"passed","source_exe_sha256":Original.IDENTITY,"cases":rows,
             "scope":"actual original array-coordinate helper vs modulo flattening and VM"}
     write_json(ROOT/"reports/array_index_tests.json",report)

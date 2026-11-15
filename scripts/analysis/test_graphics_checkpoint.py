@@ -26,6 +26,12 @@ def run():
         (["create 1 4 4 0","fill 1 0 0 4 4 65535","create 2 4 4 0",
           "fill 2 0 0 4 4 255","drawmode 1 3","paste 2 1 0 0 4 4 0 0 1 1 0 64 0",
           "thumbnail 2 1"],{1:32,2:32}),
+        (["create 1 2 2 0","fill 1 0 0 2 2 255","create 2 4 4 0",
+          "fill 2 0 0 4 4 65535","copy 1 0 0 4 4 2 0 0","release 1",
+          "create 1 4 4 0","fill 1 0 0 4 4 65280"],{1:32,2:32}),
+        (["create 1 4 4 0","fill 1 0 0 4 4 255","create 2 4 4 0",
+          "fill 2 0 0 4 4 65535","copy 1 0 0 4 4 2 0 0","release 1",
+          "create 1 2 2 0","fill 1 0 0 2 2 65280"],{2:32}),
     ]
     for commands,pages in fixtures:
         live=lua.table_from({i:{"width":4,"height":4,"depth":depth}

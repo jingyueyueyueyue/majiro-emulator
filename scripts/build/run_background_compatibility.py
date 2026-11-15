@@ -51,7 +51,7 @@ QUEUE = (
     ("startup_timing", "scripts/analysis/test_startup_timing_batch.py",
      ["--repeats", "8", "--jobs", "4"], 2400),
     ("chapter_entries", "scripts/analysis/test_chapter_regressions.py",
-     ["--pages", "6", "--seconds", "3", "--jobs", "4"], 7200),
+     ["--pixels", "--pages", "6", "--seconds", "120", "--jobs", "4"], 7200),
     ("runtime_regressions", "scripts/build/run_recovery_regressions.py", ["--jobs", "4"], 1800),
     ("port_assembly", "scripts/build/build_windows.py", [], 300),
     ("port_assets", "scripts/build/build_windows.py", ["--verify-only"], 1800),
