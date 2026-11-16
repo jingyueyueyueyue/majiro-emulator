@@ -60,6 +60,8 @@ struct Entry { size_t archive; majiro::Member member; std::string name; };
 std::vector<Source> sources;
 std::vector<size_t> source_order;
 std::map<std::string, Entry> members;
+std::map<std::string,std::string> decoded_archive_names;
+size_t decoded_archive_name_bytes=0;
 std::set<std::string> loose_names;
 std::map<std::string,std::string> text_snapshot;
 std::map<std::string,std::set<std::string>> text_catalog;
@@ -182,6 +184,17 @@ std::string convert(const std::vector<uint8_t>& data, const char* from, const ch
     auto result = native_bytes(output); env->DeleteLocalRef(output);
     return std::string(result.begin(), result.end());
 }
+std::string archive_name(const std::string& raw) {
+    if(std::all_of(raw.begin(),raw.end(),[](unsigned char c){return c<128;}))return raw;
+    auto found=decoded_archive_names.find(raw);
+    if(found!=decoded_archive_names.end())return found->second;
+    auto decoded=convert(std::vector<uint8_t>(raw.begin(),raw.end()),"windows-31j","UTF-8");
+    const size_t bytes=raw.size()+decoded.size()+64;
+    if(decoded_archive_name_bytes+bytes<=8u*1024*1024){
+        decoded_archive_names.emplace(raw,decoded);decoded_archive_name_bytes+=bytes;
+    }
+    return decoded;
+}
 std::string key(std::string name) {
     return majiro::resource_key(std::move(name));
 }
@@ -229,7 +242,11 @@ std::vector<uint8_t> read_member(const std::string& name,majiro::TextSource* pro
         if(provenance)*provenance=source;
         return overlay;
     }
-    bool loose=false;auto raw=java_read(name,false,&loose);
+    const auto indexed=members.find(normalized);
+    const bool archive_image=indexed!=members.end()&&!loose_names.count(normalized)
+        &&majiro::image_archive_member(normalized);
+    bool loose=false;
+    auto raw=archive_image?std::vector<uint8_t>{}:java_read(name,false,&loose);
     if(loose)source={"original","loose/"+key(name)};
     else{
         auto found=members.find(key(name));need(found!=members.end(),"resource not found: "+name);
@@ -249,8 +266,7 @@ void rebuild_members(){
     for(auto index:source_order){
         const auto& source=sources[index];if(!source.active)continue;
         for(const auto& member:source.archive.members){
-            auto name=convert(std::vector<uint8_t>(member.raw_name.begin(),member.raw_name.end()),
-                "windows-31j","UTF-8");
+            auto name=archive_name(member.raw_name);
             if(source.image_only&&!majiro::image_archive_member(name))continue;
             members.emplace(key(name),Entry{index,member,name});
         }
@@ -740,8 +756,7 @@ void pin_archive_text(int fd,const majiro::Archive& archive,const std::string& n
                       const std::string& scope,bool image_only){
     std::string identity;
     if(!image_only)for(const auto& member:archive.members){
-        auto decoded=convert(std::vector<uint8_t>(member.raw_name.begin(),member.raw_name.end()),
-                             "windows-31j","UTF-8");
+        auto decoded=archive_name(member.raw_name);
         const auto normalized=key(decoded);
         if(!majiro::text_resource_member(normalized))continue;
         auto raw=read_at(fd,member.offset,member.size);
@@ -1216,15 +1231,13 @@ void refresh_movie_frame(){
     if(head[2]==movie_sequence){env->DeleteLocalRef(array);return;}
     need(head[0]>0&&head[1]>0&&uint64_t(head[0])*head[1]<=16u*1024*1024
          &&uint64_t(head[0])*head[1]+3==uint64_t(count),"movie RGBA frame bounds");
-    std::vector<jint> values(size_t(count)-3);
-    env->GetIntArrayRegion(array,3,count-3,values.data());env->DeleteLocalRef(array);checked_java();
     movie_rgba.width=unsigned(head[0]);movie_rgba.height=unsigned(head[1]);
-    movie_rgba.rgba.resize(values.size()*4);
-    for(size_t i=0;i<values.size();++i){
-        uint32_t pixel=uint32_t(values[i]);
-        movie_rgba.rgba[i*4]=uint8_t(pixel>>16);movie_rgba.rgba[i*4+1]=uint8_t(pixel>>8);
-        movie_rgba.rgba[i*4+2]=uint8_t(pixel);movie_rgba.rgba[i*4+3]=uint8_t(pixel>>24);
-    }
+    movie_rgba.rgba.resize(size_t(count-3)*4);
+    // The ARM64 Java producer publishes little-endian words containing RGBA
+    // bytes. Preserve the payload, including alpha, with one JNI bulk copy.
+    static_assert(sizeof(jint)==4);
+    env->GetIntArrayRegion(array,3,count-3,reinterpret_cast<jint*>(movie_rgba.rgba.data()));
+    env->DeleteLocalRef(array);checked_java();
     movie_sequence=head[2];
     if(movie_texture_mode&&movie_page>0){
         auto response=majiro::pixels::command("frame "+std::to_string(movie_page)+" movie://texture");
@@ -1293,6 +1306,16 @@ int movies(lua_State* state) {
     }
     env->DeleteLocalRef(list); return 1;
 }
+int movie_asset(lua_State* state) {
+    const auto name=argument(state,1);
+    auto filename=java_string(name);
+    const auto duration=env->CallStaticLongMethod(bridge,
+        method("movieDuration","(Ljava/lang/String;)J"),filename);
+    env->DeleteLocalRef(filename);checked_java();
+    if(duration<0){lua_pushnil(state);return 1;}
+    lua_newtable(state);text_field(state,"file","movie/"+name);
+    number_field(state,"duration_ms",double(duration));return 1;
+}
 void host_functions() {
     lua_newtable(lua);
 #define HOST(NAME) lua_pushcfunction(lua, guarded<NAME>); lua_setfield(lua, -2, #NAME)
@@ -1310,7 +1333,7 @@ void host_functions() {
     HOST(resize_window);
     HOST(font_filter);
     HOST(set_clock); HOST(screen_mode);HOST(screen_fit); HOST(font_dialog);
-    HOST(media_asset); HOST(audio); HOST(movie); HOST(movie_position); HOST(movies);
+    HOST(media_asset); HOST(audio); HOST(movie); HOST(movie_position); HOST(movies); HOST(movie_asset);
     HOST(picture_key);
 #undef HOST
     lua_setglobal(lua, "HOST");
@@ -1357,7 +1380,7 @@ void initialize_sources() {
         auto archive = majiro::read_archive(read, size);
         size_t index = sources.size();
         for (const auto& member : archive.members) {
-            auto name = convert(std::vector<uint8_t>(member.raw_name.begin(), member.raw_name.end()), "windows-31j", "UTF-8");
+            auto name = archive_name(member.raw_name);
             if(image_only&&!majiro::image_archive_member(name))continue;
             members.emplace(key(name), Entry{index, member, name});
         }
@@ -1795,7 +1818,10 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** 
                 }
             }
             present_time_us+=elapsed_us(present_began);
-            SDL_Delay(std::max(1,std::min(250,next_wake)));
+            // Lua movie waits may have a distant completion deadline. Decoder
+            // frame publication must still be sampled at display cadence.
+            const int wake_limit=(movie_surface_active||movie_texture_mode)?8:250;
+            SDL_Delay(std::max(1,std::min(wake_limit,next_wake)));
         }
     } catch (const std::exception& error) {
         std::string message = error.what();

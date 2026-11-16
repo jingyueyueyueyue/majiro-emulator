@@ -43,6 +43,8 @@ static bool checkpoint_active=false;
 static std::vector<std::wstring> private_fonts;
 static std::vector<uint8_t> last_presented;
 static int last_width=0,last_height=0;
+static uint64_t graphics_revision=0,last_composed_revision=0;
+static std::string last_composed_request;
 static majiro::screen::Frame screen_view;
 static unsigned frame_session=0;
 static std::mutex guard;
@@ -136,6 +138,15 @@ static uint8_t alpha_at(const Page& p,size_t pixel) {
 static void put(int id,Page&& value) {
     require(id>0 && pages.find(id)==pages.end(),"duplicate/invalid page handle");
     pages.emplace(id,std::move(value));
+}
+static void track_graphics_revision(const std::string& op) {
+    // New operations invalidate conservatively; nested batches track their
+    // individual commands. Read-only requests never change page storage.
+    if(op=="get"||op=="pixel"||op=="stats"||op=="checkpoint_export"||op=="batch"||
+       op=="png"||op=="cachebmp"||op=="session"||op=="fontfile"||op=="font_dialog"||
+       op=="sha256"||op.rfind("save_",0)==0||op=="render"||op=="renderfast"||
+       op=="renderref"||op=="present"||op=="presentview"||op=="presentzoom")return;
+    ++graphics_revision;
 }
 static ComPtr<IWICImagingFactory> factory() {
     ComPtr<IWICImagingFactory> value;
@@ -418,6 +429,7 @@ static std::wstring save_path(const std::string& name){
 static std::string run(const std::string& request) {
     require(request.size()<=65536,"request too long");
     std::istringstream in(request);std::string op;in>>op;
+    track_graphics_revision(op);
     if(op=="font_dialog"){
         auto split=request.find('\n');require(split!=std::string::npos,"font family missing");
         auto face=wide(request.substr(split+1));
@@ -907,7 +919,7 @@ static std::string run(const std::string& request) {
             p.depth==8?uint8_t(color):uint8_t(color>>16),255};
         const int64_t right=std::min(int64_t(p.w),int64_t(x)+w);
         const int64_t bottom=std::min(int64_t(p.h),int64_t(y)+h);
-        if(!multiply&&amount==255){
+        if(op=="fill"){
             const int64_t left=std::max(x,0),top=std::max(y,0);
             if(left>=right||top>=bottom)return "OK";
             uint32_t packed;std::memcpy(&packed,value,4);
@@ -922,8 +934,13 @@ static std::string run(const std::string& request) {
                 for(int c=0;c<4;++c){
                     if(multiply){
                         if(c<3)p.rgba[at+c]=uint8_t((p.rgba[at+c]*(value[c]+1))>>8);
-                    }else p.rgba[at+c]=uint8_t(
-                        (p.rgba[at+c]*(255-amount)+value[c]*(amount+1))>>8);
+                    }else {
+                        // grp_extboxfill uses reverse alpha, like extcopy.
+                        // Original kernels weight old*(anti+1) and fill*(256-anti):
+                        // anti=255 preserves the existing color/mask exactly.
+                        p.rgba[at+c]=uint8_t(
+                            (p.rgba[at+c]*(amount+1)+value[c]*(256-amount))>>8);
+                    }
                 }
             }return "OK";
     }
@@ -1283,6 +1300,9 @@ static std::string run(const std::string& request) {
         return "OK";
     }
     if(op=="render"||op=="present"||op=="presentview"||op=="presentzoom"||op=="renderfast"||op=="renderref"){
+        const bool presenting=op=="present"||op=="presentview"||op=="presentzoom";
+        if(presenting&&last_composed_request==request&&last_composed_revision==graphics_revision)
+            return "OK unchanged";
         int base;require(bool(in>>base),"render base");
         int kind=0;int32_t home_x=0,home_y=0;
         int zoom=0;
@@ -1326,11 +1346,14 @@ static std::string run(const std::string& request) {
                 result.rgba[to+3]=255;
             }
         }
-        if(op=="present"||op=="presentview"||op=="presentzoom"){
-            if(last_width==result.w&&last_height==result.h&&last_presented==result.rgba)
+        if(presenting){
+            if(last_width==result.w&&last_height==result.h&&last_presented==result.rgba){
+                last_composed_request=request;last_composed_revision=graphics_revision;
                 return "OK unchanged";
+            }
             png_fast(result,path);
             last_presented=result.rgba;last_width=result.w;last_height=result.h;
+            last_composed_request=request;last_composed_revision=graphics_revision;
             return "OK changed";
         }
         if(op=="renderfast")png_fast(result,path);else png(result,path);

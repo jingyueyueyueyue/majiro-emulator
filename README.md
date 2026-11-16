@@ -13,12 +13,15 @@
 - `player/`：独立模拟器核心、运行时和 Android 宿主。
 - `scripts/build/`、`scripts/analysis/`、`scripts/convert/`：构建、验证和格式处理。
 - `scripts/analysis/test_streaming_media.py`：大音频分块读取、缓存与小内存回归；`test_android_library_batch.py` 支持启动后持续观察及真实正文输入，使用 `--pages` 检查连续正文，逐项保存截图与日志。
+- `scripts/analysis/test_extboxfill.py`、`test_runtime_performance.py`：对话框透明遮罩、按需资源元数据、重复画面提交及视频像素传输专项，已接入集中验收。
 - `localization/`：本地翻译输入及生成数据；`localization/player/ruri/` 保存原始补丁适配元数据，不进入公开源码包。
 - `resources/`、`reports/`、`archive/`：本地产物、验证报告和按日期归档的证据。
 
 [Android ARM64 发布](https://github.com/jingyueyueyueyue/majiro-emulator/releases)
 
 TyranorNext 会将本应用作为第三方运行时模块发现。模块包名为 `com.tyranor.runtime.majiro`，启动 action 为 `com.tyranor.runtime.action.LAUNCH`，接收 `com.tyranor.runtime.extra.FOLDER_PATH`、`GAME_ROOT`、`GAME_TITLE` 和 `PROTOCOL_VERSION`。本地目录使用绝对路径；SAF 共享存储目录使用 Intent.data tree URI、`GAME_ROOT` 子目录 ID 和临时只读授权。主 App 不传存档或设置。
+
+2026-11-16 更新：修正半透明填充的反向透明度语义，恢复对话框背景与按钮。补齐并强制检查 Android 视频依赖；资源元数据改为按需读取，减少归档文件名转换、静态画面重复提交和视频逐像素搬运。版本保持 0.5。此包的对话框已获实机确认，字体顶部与后续性能调优继续单独处理。
 
 0.2 集中修复原版语义、图像与输入、音视频生命周期、存读档回滚和引擎配置识别，并优化字符串哈希、图像复制及特征扫描。原文／汉化资源方案已合入：启动前校验资源来源、编码和补丁完整性，隔离原文、本地汉化及在线翻译，保留并分区旧存档。
 

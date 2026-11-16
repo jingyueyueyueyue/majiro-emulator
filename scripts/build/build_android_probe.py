@@ -151,8 +151,12 @@ def main():
         "lib/arm64-v8a/libmajiro_core.so":Path(native["android_library"]),
         "lib/arm64-v8a/libmajiro_game.so":Path(game["library"]),
         "lib/arm64-v8a/libSDL3.so":ROOT/"references/player/SDL3/arm64-v8a/libSDL3.so"}
-    binary_assets.update({"lib/arm64-v8a/"+path.name:path
-        for path in(ROOT/"references/player/ijk/arm64-v8a").glob("*.so")})
+    for name in ("libijkffmpeg.so","libijkplayer.so","libijksdl.so"):
+        path=ROOT/"references/player/ijk/arm64-v8a"/name
+        if not path.is_file():
+            raise RuntimeError("required movie dependency missing: "+name+
+                "; run scripts/build/fetch_android_media.py before packaging")
+        binary_assets["lib/arm64-v8a/"+name]=path
     binary_inputs={target:sha256(path)for target,path in binary_assets.items()}
     compiled_resources=folder/"compiled-resources.zip"
     # Windows aapt2 directory enumeration rejects Unicode --dir paths; files

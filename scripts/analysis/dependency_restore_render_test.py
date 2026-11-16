@@ -64,7 +64,8 @@ int main(){
   auto draw=[&](bool movie=false,bool screen=true){return p.draw(&renderer,sf,vf,screen,movie,rect);};
   require(draw(),"initial frame draws");
   require(p.screen.uploads==1&&fake::drawn==scene,"initial CPU bytes reach texture");
-  require(draw()&&p.screen.uploads==1,"unchanged VM frame reuses uploaded texture");
+  auto presented=p.presented;
+  require(draw()&&p.screen.uploads==1&&p.presented==presented,"unchanged VM frame avoids upload and present");
   auto create=p.screen.creations;
   require(!p.event(SDL_EVENT_QUIT)&&p.screen.get(),"unrelated event preserves texture");
   for(auto type:{SDL_EVENT_RENDER_DEVICE_RESET,SDL_EVENT_RENDER_TARGETS_RESET,SDL_EVENT_DID_ENTER_FOREGROUND}){
@@ -119,8 +120,9 @@ int main(){
   require(rejected,"negative dimensions rejected");
   rejected=false;try{validate_rgba(2147483647,2147483647,black);}catch(const std::runtime_error&){rejected=true;}
   require(rejected,"oversized dimensions rejected without overflow");
-  require(socket_name("com.tyranor.runtime.majiro")=="majiro-debug","runtime module socket remains compatible");
-  require(socket_name("com.tyranor.runtime.majiro.recovery")=="majiro-debug-recovery","recovery socket isolated");
+  require(socket_name("org.majiro.player")=="majiro-debug","legacy socket remains compatible");
+  require(socket_name("com.tyranor.runtime.majiro")=="majiro-debug-com.tyranor.runtime.majiro","runtime socket uses package identity");
+  require(socket_name("com.tyranor.runtime.majiro.recovery")=="majiro-debug-com.tyranor.runtime.majiro.recovery","recovery socket isolated");
   require(socket_name("com.tyranor.runtime.majiro.other")!=socket_name("com.tyranor.runtime.majiro.recovery"),"other package socket isolated");
   p.clear();
   require(!p.screen.get()&&!p.movie.get()&&p.presented==0&&p.last_error.empty(),"session cleanup clears textures and diagnostics");

@@ -66,6 +66,7 @@ static void png_fast(Page& page, const std::string& path) { png(page, path); }
 static std::string run(const std::string& request) {
     std::istringstream in(request);
     std::string op; in >> op;
+    track_graphics_revision(op);
     if (op == "batch") {
         size_t offset = request.find('\n');
         require(offset != std::string::npos, "batch missing"); ++offset;
@@ -170,6 +171,7 @@ static std::string run(const std::string& request) {
 void install(Host callbacks) {
     host = std::move(callbacks); pages.clear();checkpoint_pages.clear();checkpoint_active=false;
     last_presented.clear();last_width=last_height=0;screen_view.reset();
+    last_composed_request.clear();
 }
 std::string command(const std::string& request) {
     try { return run(request); }

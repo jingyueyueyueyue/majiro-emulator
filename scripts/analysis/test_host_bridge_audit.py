@@ -40,7 +40,8 @@ def run():
     host=lua.table()
     configuration=lua.table_from({"identity":"a"*64,"width":800,"height":600},recursive=True)
     lua.globals()["AUDIT_CONFIGURATION"]=configuration
-    paths={"runtime/player_configuration.lua":"return {make=function()return AUDIT_CONFIGURATION end}",
+    lua.globals()["AUDIT_CONFIGURATION_SOURCE"]=player_path("runtime/player_configuration.lua").read_text(encoding="utf8")
+    paths={"runtime/player_configuration.lua":"local m=assert(loadstring(AUDIT_CONFIGURATION_SOURCE))();m.make=function()return AUDIT_CONFIGURATION end;return m",
            "runtime/majiro_save_compatibility.lua":"return {new=function()return {recover=function()return {recovered=0,rejected=0,conflicts=0}end,accepts=function()return false end}end}",
            "scripts/opcodes.lua":"return {}","scripts/syscall_names.lua":"return {}",
            "runtime/majiro_text_resources.lua":player_path("runtime/majiro_text_resources.lua").read_text(encoding="utf8"),

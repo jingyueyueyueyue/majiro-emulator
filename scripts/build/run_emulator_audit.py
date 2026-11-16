@@ -26,6 +26,8 @@ EXTRA_SUITES = (
     "test_chapter_menu_dispatch",
     "test_text_codec",
     "test_android_external_launch",
+    "test_extboxfill",
+    "test_runtime_performance",
 )
 TEXT_RESOURCE_SUITES = {
     "test_text_mode", "test_patch_manifest", "test_raw_player_patch",

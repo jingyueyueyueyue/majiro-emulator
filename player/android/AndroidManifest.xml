@@ -19,6 +19,7 @@
     </queries>
     <instrumentation android:functionalTest="true" android:name="org.majiro.player.CoreInstrumentation" android:targetPackage="com.tyranor.runtime.majiro" />
     <instrumentation android:functionalTest="true" android:name="org.majiro.player.RenderInstrumentation" android:targetPackage="com.tyranor.runtime.majiro" />
+    <instrumentation android:functionalTest="true" android:name="org.majiro.player.MovieInstrumentation" android:targetPackage="com.tyranor.runtime.majiro" />
     <application android:allowBackup="false" android:debuggable="true" android:icon="@drawable/majiro_game_icon" android:label="Majiro 模拟器" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:usesCleartextTraffic="true">
         <activity android:configChanges="orientation|screenSize" android:exported="true" android:name="org.majiro.player.MainActivity">
             <intent-filter>

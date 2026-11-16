@@ -123,15 +123,11 @@ if vm_encoding~='cp932'and not text_patch and not raw_patch then
 end
 local function refresh_archive_resources()
   local names={}
-  local metadata={}
   for _,member in ipairs(HOST.member_names())do
     local key=member:lower();names[key]=true
-    if key:match('%.rct$')or key:match('%.rc8$')or key:match('%.png$')then
-      metadata[key]=HOST.image_metadata(member)
-    end
   end
   options.resource_names=names
-  options.image_metadata=metadata
+  options.image_metadata=module('runtime/player_configuration.lua').image_metadata(names)
   options.source_generation=(options.source_generation or 0)+1
 end
 options.archive=function(action,name)

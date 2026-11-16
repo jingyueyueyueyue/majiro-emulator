@@ -105,6 +105,7 @@ public final class MovieTextures {
         EGLSurface pbuffer = EGL14.EGL_NO_SURFACE;
         EGLConfig config;
         int textureId, program, sequence, gain;
+        int positionAttribute,textureAttribute,transformUniform,samplerUniform;
         volatile int width, height;
         volatile int[] pixels;
         volatile boolean closed, finished, suspended;
@@ -263,6 +264,10 @@ public final class MovieTextures {
             GLES20.glDeleteShader(vertex);GLES20.glDeleteShader(fragment);
             int[] linked=new int[1];GLES20.glGetProgramiv(program,GLES20.GL_LINK_STATUS,linked,0);
             if(linked[0]==0)throw new IOException("movie GL program link");
+            positionAttribute=GLES20.glGetAttribLocation(program,"p");
+            textureAttribute=GLES20.glGetAttribLocation(program,"t");
+            transformUniform=GLES20.glGetUniformLocation(program,"m");
+            samplerUniform=GLES20.glGetUniformLocation(program,"s");
             texture=new SurfaceTexture(textureId);
             texture.setOnFrameAvailableListener(new SurfaceTexture.OnFrameAvailableListener(){
                 @Override public void onFrameAvailable(SurfaceTexture owner){
@@ -294,22 +299,16 @@ public final class MovieTextures {
             GLES20.glViewport(0,0,width,height);GLES20.glUseProgram(program);
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,textureId);
-            int p=GLES20.glGetAttribLocation(program,"p"),t=GLES20.glGetAttribLocation(program,"t");
+            int p=positionAttribute,t=textureAttribute;
             quad.position(0);GLES20.glVertexAttribPointer(p,2,GLES20.GL_FLOAT,false,16,quad);
             quad.position(2);GLES20.glVertexAttribPointer(t,2,GLES20.GL_FLOAT,false,16,quad);
             GLES20.glEnableVertexAttribArray(p);GLES20.glEnableVertexAttribArray(t);
-            GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(program,"m"),1,false,transform,0);
-            GLES20.glUniform1i(GLES20.glGetUniformLocation(program,"s"),0);
+            GLES20.glUniformMatrix4fv(transformUniform,1,false,transform,0);
+            GLES20.glUniform1i(samplerUniform,0);
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP,0,4);
             rgba.position(0);GLES20.glReadPixels(0,0,width,height,GLES20.GL_RGBA,GLES20.GL_UNSIGNED_BYTE,rgba);
             if(GLES20.glGetError()!=GLES20.GL_NO_ERROR)throw new IOException("movie GL readback failed");
-            int[] frame=new int[3+width*height];frame[0]=width;frame[1]=height;frame[2]=++sequence;
-            for(int y=0;y<height;++y)for(int x=0;x<width;++x){
-                int at=((height-1-y)*width+x)*4;
-                frame[3+y*width+x]=((rgba.get(at+3)&255)<<24)|((rgba.get(at)&255)<<16)
-                    |((rgba.get(at+1)&255)<<8)|(rgba.get(at+2)&255);
-            }
-            pixels=frame;firstFrame.countDown();
+            pixels=MovieFramePixels.pack(rgba,width,height,++sequence);firstFrame.countDown();
         }
         @Override public boolean isClosed(){return closed;}
         @Override public boolean awaitClosed(long timeoutMs) throws InterruptedException {

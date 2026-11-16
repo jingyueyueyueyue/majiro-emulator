@@ -81,6 +81,9 @@ struct FrameView {
 };
 
 class Presentation {
+    bool has_frame_ = false, show_scene_ = false, show_movie_ = false;
+    bool scene_available_ = false, video_available_ = false;
+    SDL_FRect movie_rect_{};
 public:
     TextureCache screen, movie;
     uint64_t attempts = 0, presented = 0, failures = 0;
@@ -103,6 +106,7 @@ public:
     bool draw(SDL_Renderer* renderer, FrameView scene, FrameView video, bool show_scene,
               bool show_movie, const SDL_FRect& movie_rect) {
         ++attempts;
+        const auto screen_uploads=screen.uploads,movie_uploads=movie.uploads;
         std::string error;
         auto failed = [&] {
             ++failures;
@@ -120,6 +124,12 @@ public:
         if (show_movie && video.available()
             && !movie.upload(renderer, video.width, video.height, *video.rgba, "movie", error))
             return failed();
+        const bool same_layout=has_frame_&&show_scene_==show_scene&&show_movie_==show_movie
+            &&scene_available_==scene.available()&&video_available_==video.available()
+            &&(!show_movie||(movie_rect_.x==movie_rect.x&&movie_rect_.y==movie_rect.y
+                &&movie_rect_.w==movie_rect.w&&movie_rect_.h==movie_rect.h));
+        if(same_layout&&screen_uploads==screen.uploads&&movie_uploads==movie.uploads)
+            return true;
         if (!check(SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255), "SDL_SetRenderDrawColor")
             || !check(SDL_RenderClear(renderer), "SDL_RenderClear")) return failed();
         if (show_scene && scene.available()
@@ -130,11 +140,14 @@ public:
             return failed();
         // Do not publish a cleared/partial frame after any preceding failure.
         if (!check(SDL_RenderPresent(renderer), "SDL_RenderPresent")) return failed();
+        has_frame_=true;show_scene_=show_scene;show_movie_=show_movie;
+        scene_available_=scene.available();video_available_=video.available();movie_rect_=movie_rect;
         ++presented;
         return true;
     }
     void clear() {
         screen.clear(); movie.clear();
+        has_frame_=false;
         attempts = presented = failures = device_resets = target_resets = foregrounds = 0;
         last_error.clear(); last_event.clear();
     }

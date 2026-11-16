@@ -91,6 +91,7 @@ public final class GameBridge {
     private static Typeface customTypeface;
     private static volatile int fontQualityMode=1;
     private static final HashMap<String, Typeface> privateTypefaces = new HashMap<String, Typeface>();
+    private static final HashMap<String,Long> movieDurations = new HashMap<String,Long>();
     private static final LinkedHashMap<String, int[]> glyphCache =
         new LinkedHashMap<String, int[]>(32, 0.75f, true) {
             @Override protected boolean removeEldestEntry(Map.Entry<String, int[]> eldest) {
@@ -161,6 +162,7 @@ public final class GameBridge {
         customTypeface = null;
         privateTypefaces.clear();
         glyphCache.clear();
+        movieDurations.clear();
         fontNameFilter = "";
         if(clipboard!=null&&clipboardListener!=null)clipboard.removePrimaryClipChangedListener(clipboardListener);
         clipboard=(android.content.ClipboardManager)activity.getSystemService(Context.CLIPBOARD_SERVICE);
@@ -473,7 +475,7 @@ public final class GameBridge {
         for(String name:children(rootId).keySet()){
             int dot=name.lastIndexOf('.');
             String ext=dot<0?"":name.substring(dot+1);
-            if(java.util.Arrays.asList("mjo","cfg","env","png","rct","rc8","wav","ogg","wma","dat","txt").contains(ext))
+            if(java.util.Arrays.asList("mjo","cfg","env","png","bmp","rct","rc8","wav","ogg","wma","dat","txt").contains(ext))
                 names.add(name);
         }
         for(PatchManifest.Layer layer:patches().layers){
@@ -1152,14 +1154,20 @@ public final class GameBridge {
         if (directory == null) return new String[0];
         ArrayList<String> rows = new ArrayList<String>();
         for (String name : children(directory).keySet()) {
-            Uri uri = resolve("movie/" + name);
-            if (name.endsWith(".wmv")) {
-                rows.add(name + "\t" + asfDuration(uri));
-                continue;
-            }
-            rows.add(name + "\t" + IjkVideo.duration(context, uri));
+            rows.add(name + "\t" + movieDuration(name));
         }
         return rows.toArray(new String[rows.size()]);
+    }
+    public static long movieDuration(String name) throws Exception {
+        if(name.indexOf('/')>=0||name.indexOf('\\')>=0||name.equals(".."))
+            throw new IllegalArgumentException("movie basename");
+        Long cached=movieDurations.get(name);
+        if(cached!=null)return cached;
+        Uri uri=resolve("movie/"+name);
+        if(uri==null)return -1;
+        long duration=name.endsWith(".wmv")?asfDuration(uri):IjkVideo.duration(context,uri);
+        movieDurations.put(name,duration);
+        return duration;
     }
     private static byte[] exact(InputStream input, int length) throws Exception {
         byte[] result = new byte[length];

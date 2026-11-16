@@ -42,9 +42,26 @@ local function tokens(text,canonical_whitespace)
   return result,remainders
 end
 M.tokens=tokens
+function M.image_metadata(names)
+  return setmetatable({},{__index=function(cache,name)
+    local extension=name:match('%.([^%.]+)$')
+    if not names[name]or not({rct=true,rc8=true,png=true,bmp=true})[extension]then return nil end
+    local value=HOST.image_metadata(name)
+    rawset(cache,name,value)
+    return value
+  end})
+end
 function M.make()
+  local movies
+  if HOST.movie_asset then
+    movies=setmetatable({},{__index=function(cache,name)
+      local value=HOST.movie_asset(name)
+      if value then rawset(cache,name,value)end
+      return value
+    end})
+  else movies=HOST.movies()end
   local data={config_files={},config_lines={},environment={},resource_names={},image_metadata={},
-    movies=HOST.movies(),identity=HOST.identity()}
+    movies=movies,identity=HOST.identity()}
   local engine=assert(loadstring(HOST.asset_text('runtime/majiro_engine.lua'),'Majiro engine recognition'))()
   local requirements=assert(HOST.engine_requirements(),'engine format requirements unavailable')
   local profile=engine.detect(requirements)
@@ -69,10 +86,9 @@ function M.make()
         local key,value=line:match('^%s*([^%s/]+)%s+(.+)$')
         if key then data.environment[key]=value:gsub('\t//.*$',''):gsub('|',' ')end
       end
-    elseif extension=='rct'or extension=='rc8'or extension=='png'then
-      data.image_metadata[key]=HOST.image_metadata(name)
     end
   end
+  data.image_metadata=M.image_metadata(data.resource_names)
   data.width=assert(tonumber(data.environment.CLIENT_WIDTH),'game CLIENT_WIDTH missing')
   data.height=assert(tonumber(data.environment.CLIENT_HEIGHT),'game CLIENT_HEIGHT missing')
   return data
