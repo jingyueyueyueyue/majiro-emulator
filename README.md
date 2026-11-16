@@ -16,7 +16,7 @@
 - `localization/`：本地翻译输入及生成数据；`localization/player/ruri/` 保存原始补丁适配元数据，不进入公开源码包。
 - `resources/`、`reports/`、`archive/`：本地产物、验证报告和按日期归档的证据。
 
-[下载 0.4 APK（Android ARM64）](https://github.com/jingyueyueyueyue/majiro-emulator/releases/download/v0.4/Majiro-0.4-arm64-v8a.apk)
+[Android ARM64 发布](https://github.com/jingyueyueyueyue/majiro-emulator/releases)
 
 TyranorNext 可通过 `org.majiro.player.action.LAUNCH` 启动已授权的 SAF 游戏目录。启动 Intent 的 `data` 必须是 SAF tree URI，`game_root` 指定树内文档 ID，`game_title` 提供显示标题，`protocol_version` 当前为 `1`。
 

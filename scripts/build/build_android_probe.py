@@ -138,9 +138,13 @@ def main():
     write_json(folder/(folder.name[:8]+"_jni_bridge.json"),{
         "status":"passed","methods":jni_evidence,"cpp_sha256":sha256(native_source),
         "class_sha256":sha256(classes/"org/majiro/player/GameBridge.class")})
+    class_archive = folder / "classes.jar"
+    with zipfile.ZipFile(class_archive, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for class_file in sorted(classes.rglob("*.class")):
+            archive.write(class_file, class_file.relative_to(classes).as_posix())
     run("d8", [str(java / "bin/java.exe"), "-cp", str(build_tools / "lib/d8.jar"),
                "com.android.tools.r8.D8", "--min-api", "26", "--lib", str(android_jar),
-               "--output", str(dex), str(sdl_jar), *map(str, classes.rglob("*.class"))])
+               "--output", str(dex), str(sdl_jar), str(class_archive)])
     unsigned, aligned, signed = folder / "unsigned.apk", folder / "aligned.apk", folder / "signed.apk"
     source_assets={}
     binary_assets={"classes.dex":dex/"classes.dex",

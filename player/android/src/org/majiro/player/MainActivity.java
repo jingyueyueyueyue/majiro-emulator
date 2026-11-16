@@ -139,13 +139,13 @@ public final class MainActivity extends Activity {
                     DiagnosticLog.write("external-launch", "persistable SAF grant unavailable: " + unavailable);
                 }
             }
-            Intent game = new Intent(this, GameActivity.class)
-                .setData(tree)
-                .setClipData(request.getClipData())
-                .putExtra("game_tree", tree.toString())
-                .putExtra("game_root", root)
-                .putExtra("game_title", request.getStringExtra(ExternalLaunchContract.EXTRA_GAME_TITLE))
-                .addFlags(grantFlags | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+            Intent game = new Intent(this, GameActivity.class);
+            game.setData(tree);
+            game.setClipData(request.getClipData());
+            game.putExtra("game_tree", tree.toString());
+            game.putExtra("game_root", root);
+            game.putExtra("game_title", request.getStringExtra(ExternalLaunchContract.EXTRA_GAME_TITLE));
+            game.addFlags(grantFlags | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
             startActivity(game);
             finish();
         } catch (Exception error) {
