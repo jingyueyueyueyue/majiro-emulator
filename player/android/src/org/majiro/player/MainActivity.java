@@ -10,6 +10,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Bundle;
+import android.provider.DocumentsContract;
 import android.text.TextUtils;
 import android.view.View;
 import android.view.WindowInsets;
@@ -49,6 +50,11 @@ public final class MainActivity extends Activity {
         AppearanceSettings.applyTheme(this);
         super.onCreate(bundle);
         DiagnosticLog.initialize(this);
+        if (bundle == null && ExternalLaunchContract.ACTION_LAUNCH.equals(getIntent().getAction())) {
+            if (launchExternal(getIntent())) {
+                return;
+            }
+        }
         this.library = new GameLibrary(this);
         this.colors = Ui.colors(this);
         this.renderedDark = AppearanceSettings.isDark(this);
@@ -80,6 +86,78 @@ public final class MainActivity extends Activity {
                 });
             }
         }
+    }
+
+    /**
+     * Start a game from a launcher that already owns a SAF tree permission.
+     * The grant is carried by Intent.data; the root document id selects a
+     * child game directory without copying the user's files.
+     */
+    private boolean launchExternal(Intent request) {
+        try {
+            if (request.getIntExtra(ExternalLaunchContract.EXTRA_PROTOCOL_VERSION, 0)
+                    != ExternalLaunchContract.PROTOCOL_VERSION) {
+                throw new IllegalArgumentException("unsupported external launch protocol");
+            }
+            Uri tree = request.getData();
+            if (tree == null || !"content".equals(tree.getScheme()) || !DocumentsContract.isTreeUri(tree)) {
+                throw new IllegalArgumentException("a SAF tree document URI is required");
+            }
+            if ((request.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION) == 0) {
+                throw new SecurityException("read permission for the game folder was not granted");
+            }
+            String grantedRoot = DocumentsContract.getTreeDocumentId(tree);
+            String root = request.getStringExtra(ExternalLaunchContract.EXTRA_GAME_ROOT);
+            if (root == null || root.trim().isEmpty()) {
+                try {
+                    root = DocumentsContract.getDocumentId(tree);
+                } catch (IllegalArgumentException treeRoot) {
+                    root = grantedRoot;
+                }
+            }
+            if (root == null || root.trim().isEmpty()) {
+                throw new SecurityException("missing game document root");
+            }
+            if (!root.equals(grantedRoot) && !root.startsWith(grantedRoot + "/")) {
+                boolean child;
+                try {
+                    child = DocumentsContract.isChildDocument(
+                        getContentResolver(),
+                        DocumentsContract.buildDocumentUriUsingTree(tree, grantedRoot),
+                        DocumentsContract.buildDocumentUriUsingTree(tree, root));
+                } catch (UnsupportedOperationException unsupported) {
+                    child = false;
+                }
+                if (!child) throw new SecurityException("game root is outside the granted tree");
+            }
+            int grantFlags = request.getFlags() &
+                (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            if ((request.getFlags() & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) != 0) {
+                try {
+                    getContentResolver().takePersistableUriPermission(tree, grantFlags);
+                } catch (SecurityException | IllegalArgumentException unavailable) {
+                    DiagnosticLog.write("external-launch", "persistable SAF grant unavailable: " + unavailable);
+                }
+            }
+            Intent game = new Intent(this, GameActivity.class);
+            game.setData(tree);
+            game.setClipData(request.getClipData());
+            game.putExtra("game_tree", tree.toString());
+            game.putExtra("game_root", root);
+            game.putExtra("game_title", request.getStringExtra(ExternalLaunchContract.EXTRA_GAME_TITLE));
+            game.addFlags(grantFlags | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+            startActivity(game);
+            finish();
+        } catch (Exception error) {
+            DiagnosticLog.failure("external-launch", error);
+            new AlertDialog.Builder(this)
+                .setTitle("无法启动游戏")
+                .setMessage(error.getMessage())
+                .setPositiveButton("返回", (dialog, which) -> finish())
+                .setOnCancelListener(dialog -> finish())
+                .show();
+        }
+        return true;
     }
 
     /* JADX INFO: renamed from: lambda$onCreate$0$org-majiro-player-MainActivity, reason: not valid java name */
