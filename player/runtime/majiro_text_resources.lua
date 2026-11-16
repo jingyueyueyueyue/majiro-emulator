@@ -208,9 +208,9 @@ function M.new(mode,config,host,modules)
     for _,name in ipairs(host.text_resource_names())do
       has_start=has_start or name=='start.mjo'
       if name:match('%.mjo$')then
-        -- Original/online scripts are parsed when the VM first loads them.
-        -- Local mode keeps full preflight so every declared patch is checked.
-        if mode=='local'then api.apply(host.script(name))
+        -- Fully validate each declared patch. Untouched original scripts
+        -- already have a pinned digest and are parsed on first VM access.
+        if mode=='local'and api.required[name]then api.apply(host.script(name))
         elseif not(host.text_resource_pinned and host.text_resource_pinned(name))then
           pin_text_resource(host,name)
         end

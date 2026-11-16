@@ -92,7 +92,7 @@ local options={
   wallpaper=HOST.wallpaper,change_cursor=HOST.change_cursor,
   resize_window=HOST.resize_window,
   font_filter=HOST.font_filter,
-  cp932=HOST.cp932,font_face='sans-serif',font_dialog=HOST.font_dialog,
+  cp932=HOST.cp932,font_dialog=HOST.font_dialog,
   decode_bytes=HOST.decode_bytes,service=HOST.service,
   native_decode_bytes=HOST.decode_bytes,native_cp932=HOST.cp932,
   screen_mode=HOST.screen_mode,source_identity=identity,

@@ -10,7 +10,7 @@ import struct
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
-WORKSPACE = ROOT.parents[1] if ROOT.parent.name == "text-mode-restoration" else ROOT.parent
+WORKSPACE = next((parent for parent in ROOT.parents if (parent/"recovered").is_dir()),ROOT.parent)
 sys.path[:0] = [str(ROOT / "scripts/convert"), str(ROOT / "scripts/build")]
 from port_common import lua_value
 from majiro_mjo import opcode_table

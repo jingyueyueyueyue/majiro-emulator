@@ -35,6 +35,7 @@ std::vector<Source> sources;
 std::vector<fs::path> descriptors;
 std::map<std::string,Entry> members;
 std::set<std::string> names;
+std::set<std::string> loose_names;
 std::map<std::string,std::string> text_snapshot;
 std::map<std::string,std::set<std::string>> text_catalog;
 bool text_snapshot_ready=false;
@@ -206,7 +207,11 @@ int wmain(int argc,wchar_t** argv){
             }
         }lua_settop(lua,0);
         for(const auto& path:fs::directory_iterator(root)){
-            auto name=key(utf8(path.path().filename()));if(path.is_regular_file()&&majiro::text_resource_member(name))names.insert(name);
+            auto name=key(utf8(path.path().filename()));
+            if(path.is_regular_file()){
+                loose_names.insert(name);
+                if(majiro::text_resource_member(name))names.insert(name);
+            }
         }
         for(const auto& layer:patch_layers)for(const auto& path:fs::directory_iterator(root/fs::u8path(layer.directory))){
             auto name=key(utf8(path.path().filename()));if(path.is_regular_file()&&majiro::text_resource_member(name))names.insert(name);

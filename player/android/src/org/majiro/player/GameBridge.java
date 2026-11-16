@@ -34,8 +34,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import tv.danmaku.ijk.media.player.IjkMediaPlayer;
@@ -89,15 +87,11 @@ public final class GameBridge {
     private static volatile int movieState;
     private static int movieVolume = 1000;
     private static Typeface customTypeface;
+    private static boolean patchTypefaceChecked;
     private static volatile int fontQualityMode=1;
     private static final HashMap<String, Typeface> privateTypefaces = new HashMap<String, Typeface>();
     private static final HashMap<String,Long> movieDurations = new HashMap<String,Long>();
-    private static final LinkedHashMap<String, int[]> glyphCache =
-        new LinkedHashMap<String, int[]>(32, 0.75f, true) {
-            @Override protected boolean removeEldestEntry(Map.Entry<String, int[]> eldest) {
-                return size() > 32;
-            }
-        };
+    private static final GlyphCache glyphCache=new GlyphCache(32,8L*1024*1024);
     private static String fontNameFilter = "";
     private static android.content.ClipboardManager clipboard;
     private static volatile boolean clipboardChanged;
@@ -110,6 +104,7 @@ public final class GameBridge {
         open(activity,uri,null);
     }
     public static void open(Activity activity,String uri,String documentRoot) throws Exception {
+        final long openBegan=android.os.SystemClock.elapsedRealtime();
         launchFailure=null;
         DiagnosticLog.initialize(activity);
         context = activity;
@@ -160,7 +155,9 @@ public final class GameBridge {
         setMediaError(null);
         movieState = 0;
         customTypeface = null;
+        patchTypefaceChecked = false;
         privateTypefaces.clear();
+        OriginalTypefaces.reset();
         glyphCache.clear();
         movieDurations.clear();
         fontNameFilter = "";
@@ -215,6 +212,8 @@ public final class GameBridge {
         File companion=new File(context.getFilesDir(),savePrefix+identity+(textMode.equals("local")?"/original":""));
         saveMigration=new SaveMigration(gameFiles,companion);
         DiagnosticLog.write("game","source="+tree+" root="+rootId+" storage="+identity+" requested="+requestedTextMode+" text="+textMode);
+        DiagnosticLog.write("runtime","startup phase=java_open elapsed_ms="+
+            (android.os.SystemClock.elapsedRealtime()-openBegan));
     }
     public static void debugLog(String message){DiagnosticLog.write("runtime",message);}
     public static void launchFailed(Exception error){
@@ -680,19 +679,9 @@ public final class GameBridge {
         int[] codepoints = message.codePoints().toArray();
         if(height<=0||height>4096||steps==null||(boxed?steps.length<2:steps.length!=codepoints.length))
             throw new IllegalArgumentException("invalid glyph host geometry");
-        StringBuilder cacheKeyBuilder=new StringBuilder(face.length()+message.length()+64);
-        cacheKeyBuilder.append(face).append('\0').append(height).append('\0').append(quality)
-            .append('\0').append(boxed?1:0);
-        for(int step:steps)cacheKeyBuilder.append('\0').append(step);
-        cacheKeyBuilder.append('\0').append(message);
-        String cacheKey=cacheKeyBuilder.toString();
-        synchronized(glyphCache){
-            int[] cached=glyphCache.get(cacheKey);
-            if(cached!=null)return cached;
-        }
         // Measurement and rasterization must use the same font on the first
         // call too; loading a private face after measuring changes wrapping.
-        if (customTypeface == null) {
+        if (customTypeface == null && !patchTypefaceChecked&&"local".equals(translationMode())) {
             try {
                 byte[] bytes = readFile("patches/fonts/SourceHanSansSC-Regular.otf");
                 if (bytes != null) {
@@ -700,14 +689,27 @@ public final class GameBridge {
                             "SourceHanSansSC-Regular.otf", bytes);
                     customTypeface = Typeface.createFromFile(file);
                 }
+                patchTypefaceChecked = true;
             } catch (Exception error) { throw new IllegalStateException("private font load failed", error); }
         }
         int half = boxed ? steps[0] : 0;
         int boxw = boxed ? steps[1] : 0;
         Paint measure = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
-        Typeface privateFace = privateTypefaces.get(key(face));
-        measure.setTypeface(PatchTypography.apply(face, privateFace != null ? privateFace :
-            customTypeface != null ? customTypeface : Typeface.create(PatchTypography.family(face), Typeface.NORMAL)));
+        Typeface privateFace = privateTypefaces.get(key(PatchTypography.family(face)));
+        if(privateFace==null&&!"local".equals(translationMode()))
+            privateFace=OriginalTypefaces.resolve(context,PatchTypography.family(face));
+        Typeface resolvedFace=PatchTypography.apply(face,privateFace!=null?privateFace:
+            customTypeface!=null?customTypeface:Typeface.create(PatchTypography.family(face),Typeface.NORMAL));
+        StringBuilder cacheKeyBuilder=new StringBuilder(face.length()+message.length()+80);
+        cacheKeyBuilder.append(face).append('\0').append(height).append('\0').append(quality)
+            .append('\0').append(boxed?1:0);
+        for(int step:steps)cacheKeyBuilder.append('\0').append(step);
+        cacheKeyBuilder.append('\0').append(message);
+        String cacheKey=cacheKeyBuilder.toString();
+        int[] cached=glyphCache.get(resolvedFace,cacheKey);
+        if(cached!=null)return cached;
+        measure.setTypeface(resolvedFace);
+        measure.setTextLocale("local".equals(translationMode())?Locale.SIMPLIFIED_CHINESE:Locale.JAPANESE);
         measure.setTextSize(height);
         ArrayList<Integer> advances = new ArrayList<Integer>();
         ArrayList<Integer> xs = new ArrayList<Integer>(), ys = new ArrayList<Integer>();
@@ -717,7 +719,12 @@ public final class GameBridge {
             int advance = boxed ? (half == 0
                 ? (int)Math.ceil(measure.measureText(new String(Character.toChars(cp))))
                 : (cp < 128 ? half : half * 2)) : steps[i];
+            if(advance<0)throw new IllegalArgumentException("negative glyph advance");
+            if((long)x+advance>Integer.MAX_VALUE)
+                throw new IllegalStateException("glyph raster memory limit");
             if (cp == '\n' || (boxed && boxw > 0 && x != 0 && x + advance > boxw)) {
+                if((long)y+2L*height>Integer.MAX_VALUE)
+                    throw new IllegalStateException("glyph raster memory limit");
                 max = Math.max(max, x); x = 0; y += height;
                 if (cp == '\n') { advances.add(0); xs.add(-1); ys.add(y); continue; }
             }
@@ -729,8 +736,8 @@ public final class GameBridge {
         Bitmap bitmap = Bitmap.createBitmap(w * quality, h * quality, Bitmap.Config.ALPHA_8);
         Canvas canvas = new Canvas(bitmap);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
-        paint.setTypeface(PatchTypography.apply(face, privateFace!=null?privateFace:
-            customTypeface != null ? customTypeface : Typeface.create(PatchTypography.family(face), Typeface.NORMAL)));
+        paint.setTypeface(resolvedFace);
+        paint.setTextLocale("local".equals(translationMode())?Locale.SIMPLIFIED_CHINESE:Locale.JAPANESE);
         paint.setTextSize(height * quality);
         paint.setColor(Color.WHITE);
         GlyphCell cell=GlyphCell.measure(paint,codepoints,height*quality,quality);
@@ -757,7 +764,7 @@ public final class GameBridge {
                 total += source[(yy * quality + sy) * rowBytes + xx * quality + sx] & 255;
             result[2 + yy * w + xx] = (total + samples/2) / samples;
         }
-        synchronized(glyphCache){glyphCache.put(cacheKey,result);}
+        glyphCache.put(resolvedFace,cacheKey,result);
         return result;
     }
 

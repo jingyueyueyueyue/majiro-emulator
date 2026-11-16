@@ -1,6 +1,7 @@
 #include "lua_script.hpp"
 #include "majiro_core.hpp"
 #include "majiro_opcodes.hpp"
+#include "opcode_lookup.hpp"
 extern "C" {
 #include "lua.h"
 }
@@ -10,6 +11,7 @@ extern "C" {
 #include <limits>
 #include <set>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace majiro {
 namespace {
@@ -61,8 +63,7 @@ std::vector<uint8_t> repair_script_jumps(const std::vector<uint8_t>& data,
     while(cursor<code.size()){
         boundaries.insert(uint32_t(cursor));
         uint16_t opcode=word();
-        auto definition=std::find_if(kOpcodes.begin(),kOpcodes.end(),
-            [opcode](const auto& item){return item.code==opcode;});
+        auto definition=opcode_definition(opcode);
         require(definition!=kOpcodes.end(),"unknown patch MJO opcode");
         for(const char* field=definition->encoding;*field;++field){
             if(*field=='s'||*field=='t'){auto count=word();skip(count);}
@@ -116,11 +117,12 @@ void push_script(lua_State* lua, const std::string& name, const std::vector<uint
     lua_newtable(lua);
     size_t cursor = 0;
     int instruction = 1;
+    std::unordered_map<std::string,std::string> decoded;
+    size_t decoded_bytes=0;
     while (cursor < code.size()) {
         size_t offset = cursor;
         uint16_t opcode = u16(code.data() + cursor); cursor += 2;
-        auto definition = std::find_if(kOpcodes.begin(), kOpcodes.end(),
-                                      [opcode](const auto& item) { return item.code == opcode; });
+        auto definition = opcode_definition(opcode);
         if (definition == kOpcodes.end()) throw std::runtime_error("missing opcode definition after validation");
         lua_newtable(lua);
         lua_pushnumber(lua, offset); lua_rawseti(lua, -2, 1);
@@ -130,8 +132,17 @@ void push_script(lua_State* lua, const std::string& name, const std::vector<uint
             if (*field == 's' || *field == 't') {
                 uint16_t length = u16(code.data() + cursor); cursor += 2;
                 if (*field == 's') {
-                    auto value = decode(std::vector<uint8_t>(code.begin() + cursor,
-                                                             code.begin() + cursor + length - 1));
+                    std::string raw(code.begin()+cursor,code.begin()+cursor+length-1);
+                    auto found=decoded.find(raw);
+                    std::string value;
+                    if(found!=decoded.end())value=found->second;
+                    else{
+                        value=decode(std::vector<uint8_t>(raw.begin(),raw.end()));
+                        const size_t used=raw.size()+value.size()+64;
+                        if(decoded_bytes+used<=2u*1024*1024){
+                            decoded.emplace(std::move(raw),value);decoded_bytes+=used;
+                        }
+                    }
                     lua_pushlstring(lua, value.data(), value.size());
                 } else {
                     lua_newtable(lua);

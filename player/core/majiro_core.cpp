@@ -1,5 +1,6 @@
 #include "majiro_core.hpp"
 #include "majiro_opcodes.hpp"
+#include "opcode_lookup.hpp"
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -148,8 +149,7 @@ ScriptSummary read_script(std::vector<uint8_t> data) {
     while (in.pos < code.size()) {
         boundaries.insert(static_cast<uint32_t>(in.pos));
         uint16_t opcode = in.word();
-        auto definition = std::find_if(kOpcodes.begin(), kOpcodes.end(),
-                                      [opcode](const auto& row) { return row.code == opcode; });
+        auto definition = opcode_definition(opcode);
         require(definition != kOpcodes.end(), "unknown MJO opcode");
         for (const char* field = definition->encoding; *field; ++field) {
             switch (*field) {

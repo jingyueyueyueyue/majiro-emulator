@@ -1,5 +1,6 @@
 #include "majiro_native_import.hpp"
 #include "majiro_opcodes.hpp"
+#include "opcode_lookup.hpp"
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -40,8 +41,7 @@ std::set<uint32_t> positions(const std::vector<uint8_t>& raw) {
     while(at<code.size()){
         result.insert(static_cast<uint32_t>(at));
         uint16_t opcode=u16(code,at);at+=2;
-        auto definition=std::find_if(kOpcodes.begin(),kOpcodes.end(),
-            [opcode](const auto& row){return row.code==opcode;});
+        auto definition=opcode_definition(opcode);
         require(definition!=kOpcodes.end(),"native import script opcode missing");
         for(const char* field=definition->encoding;*field;++field){
             size_t bytes=0;

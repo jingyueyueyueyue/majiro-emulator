@@ -2,6 +2,7 @@
 #include "portable_pixels.hpp"
 #include "screen_view.hpp"
 #include "page_checkpoint.hpp"
+#include "text_shadow.hpp"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -129,7 +130,8 @@ static std::string run(const std::string& request) {
         if (op == "text" && boxh > 0) y += (boxh - raster.height) / 2;
         auto paint = [&](int xx, int yy, unsigned alpha, uint32_t rgb) {
             int64_t px = x + xx, py = y + yy;
-            if (!alpha || px < 0 || py < 0 || px >= page.w || py >= page.h) return;
+            if (!alpha || px < 0 || py < 0 || px >= page.w || py >= page.h||
+                (op=="glyphs"&&(px<x||py<y||px>=x+raster.width||py>=y+raster.height)))return;
             size_t at = (size_t(py) * page.w + px) * 4;
             if (page.antidata) {
                 auto& mask = get(page.antidata);
@@ -146,19 +148,10 @@ static std::string run(const std::string& request) {
                     + ((rgb >> (c * 8)) & 255) * alpha + 127) / 255);
             page.rgba[at + 3] = 255;
         };
-        int outline = std::min(8, int(shadow >> 24));
-        if (outline) for (int yy = 0; yy < raster.height; ++yy)
-            for (int xx = 0; xx < raster.width; ++xx) {
-                unsigned alpha = 0;
-                for (int dy = -outline; dy <= outline; ++dy)
-                    for (int dx = -outline; dx <= outline; ++dx) {
-                        int sx = xx + dx, sy = yy + dy;
-                        if (dx * dx + dy * dy > outline * outline || sx < 0 || sy < 0
-                            || sx >= raster.width || sy >= raster.height) continue;
-                        alpha = std::max(alpha, unsigned(raster.alpha[size_t(sy) * raster.width + sx]));
-                    }
-                paint(xx, yy, alpha, shadow & 0xffffff);
-            }
+        if(op=="glyphs")for(const auto& effect:majiro::text_shadow(height,shadow))
+            for(int yy=0;yy<raster.height;++yy)for(int xx=0;xx<raster.width;++xx)
+                paint(xx+effect.x,yy+effect.y,
+                    raster.alpha[size_t(yy)*raster.width+xx],effect.color);
         for (int yy = 0; yy < raster.height; ++yy)
             for (int xx = 0; xx < raster.width; ++xx)
                 paint(xx, yy, raster.alpha[size_t(yy) * raster.width + xx], color);

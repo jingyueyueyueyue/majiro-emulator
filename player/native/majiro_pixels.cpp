@@ -24,6 +24,7 @@
 #include <vector>
 #include "../core/screen_view.hpp"
 #include "../core/page_checkpoint.hpp"
+#include "../core/text_shadow.hpp"
 using Microsoft::WRL::ComPtr;
 struct Page {
     int w=0,h=0;
@@ -326,6 +327,15 @@ static void composite(Page& destination,const Page& source,int sx,int sy,int w,i
             const size_t bytes=size_t(right-left)*4;
             if(!special&&!has_mask&&anti==0&&!destination.antidata){
                 std::memcpy(destination.rgba.data()+to,source.rgba.data()+from,bytes);continue;
+            }
+            if(!special&&!raw&&!has_mask&&anti>0){
+                // Constant transparency across an unmasked row: the same
+                // integer blend, with contiguous channels for vectorization.
+                auto* out=destination.rgba.data()+to;
+                const auto* color=source.rgba.data()+from;
+                for(size_t at=0;at<bytes;++at)
+                    out[at]=uint8_t((out[at]*(anti+1)+color[at]*(256-anti))>>8);
+                continue;
             }
             for(int64_t xx=left;xx<right;++xx,from+=4,to+=4){
                 const uint8_t alpha=mask_pixels?uint8_t(255-mask_pixels[from]):source.rgba[from+3];
@@ -1152,7 +1162,8 @@ static std::string run(const std::string& request) {
             }
             dx.push_back(step);total+=step;
         }
-        const int outline=std::min(8,int(shadow>>24)),pad=outline+2;
+        const auto effects=majiro::text_shadow(height,shadow);
+        const int pad=std::max(4,height/9+2);
         const int rw=total+2*pad,rh=height+2*pad+8;
         require(rw>0&&size_t(rw)*rh<=16*1024*1024,"glyph raster budget");
         const int scale=3,sw=rw*scale,sh=rh*scale;
@@ -1198,14 +1209,8 @@ static std::string run(const std::string& request) {
                 (p.rgba[at+c]*(255-alpha)+((rgb>>(c*8))&255)*alpha+127)/255);
             p.rgba[at+3]=255;
         };
-        if(outline)for(int yy=0;yy<rh;++yy)for(int xx=0;xx<rw;++xx){
-            int alpha=0;
-            for(int dy=-outline;dy<=outline;++dy)for(int ddx=-outline;ddx<=outline;++ddx){
-                if(ddx*ddx+dy*dy>outline*outline||xx+ddx<0||yy+dy<0||xx+ddx>=rw||yy+dy>=rh)continue;
-                alpha=std::max(alpha,int(coverage[size_t(yy+dy)*rw+xx+ddx]));
-            }
-            paint(xx,yy,alpha,shadow&0xffffff);
-        }
+        for(const auto& effect:effects)for(int yy=0;yy<rh;++yy)for(int xx=0;xx<rw;++xx)
+            paint(xx+effect.x,yy+effect.y,coverage[size_t(yy)*rw+xx],effect.color);
         for(int yy=0;yy<rh;++yy)for(int xx=0;xx<rw;++xx)
             paint(xx,yy,coverage[size_t(yy)*rw+xx],color);
         SelectObject(dc,oldbitmap);SelectObject(dc,oldfont);

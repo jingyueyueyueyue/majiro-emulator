@@ -133,6 +133,8 @@ public class GameSettingsOverlay{
  public static boolean dismissNext;
  public GameSettingsOverlay(GameActivity activity){}
  public boolean dismiss(){boolean value=dismissNext;dismissNext=false;return value;}
+ public boolean isShowing(){return dismissNext;}
+ public void releaseTouchKeys(){}
  public void close(){}
 }"""
     stubs["org/majiro/player/TouchscreenBackTest.java"] = HARNESS

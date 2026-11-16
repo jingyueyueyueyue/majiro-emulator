@@ -15,7 +15,8 @@ def build():
     source = ROOT / "player/native/majiro_pixels.cpp"
     receipt = ROOT / "reports/player_native_build.json"
     inputs={path.relative_to(ROOT).as_posix():sha256(path)for path in
-            (source,ROOT/"player/core/screen_view.hpp",ROOT/"player/core/page_checkpoint.hpp")}
+            (source,ROOT/"player/core/screen_view.hpp",ROOT/"player/core/page_checkpoint.hpp",
+             ROOT/"player/core/text_shadow.hpp")}
     identity=hashlib.sha256(json.dumps(inputs,sort_keys=True).encode("utf-8")).hexdigest()[:16]
     output=ROOT/"resources/player/native"/("majiro_pixels_"+identity+".dll")
     manifest=ROOT/"player/runtime/player_native_library.lua"

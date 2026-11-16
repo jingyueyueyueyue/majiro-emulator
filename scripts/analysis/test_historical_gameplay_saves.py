@@ -13,12 +13,14 @@ from test_desktop_game_batch import files_for
 from test_host_load_atomicity import captured_options
 from lua_bridge import create_lua
 from port_common import ROOT, archive_dir, read_json, sha256, timestamp, write_json
+WORKSPACE=next((parent for parent in ROOT.parents if (parent/"recovered").is_dir()),ROOT.parent)
+RECOVERY=WORKSPACE/"resources/recovery/app-private-20261110.tar"
 
 
 def records():
     lua = create_lua()
     codec = lua.execute((ROOT / "player/runtime/majiro_codec.lua").read_text("utf8"))
-    with tarfile.open(ROOT.parent / "resources/recovery/app-private-20261110.tar") as archive:
+    with tarfile.open(RECOVERY) as archive:
         objects = {m.name: archive.extractfile(m).read() for m in archive.getmembers()
                    if m.isfile() and m.name.endswith((".mjs", ".mjb"))}
     result = []
@@ -149,7 +151,7 @@ def main(arguments=None):
     cases = [r for r in records() if not args.slot or r["slot"] in args.slot]
     report = {"status": "running", "timestamp": timestamp(), "cases": [], "device_accessed": False,
               "evidence": str(folder.relative_to(ROOT)),
-              "archive_sha256": sha256(ROOT.parent / "resources/recovery/app-private-20261110.tar")}
+              "archive_sha256": sha256(RECOVERY)}
     with ProcessPoolExecutor(max_workers=2) as pool:
         pending = {pool.submit(worker, record, str(folder)): record for record in cases}
         for future in as_completed(pending):

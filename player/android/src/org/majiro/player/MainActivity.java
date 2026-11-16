@@ -110,6 +110,7 @@ public final class MainActivity extends Activity {
                 game.putExtra("game_tree", tree.toString());
                 game.putExtra("game_root", root);
                 game.putExtra("game_title", request.getStringExtra(ExternalLaunchContract.EXTRA_GAME_TITLE));
+                forwardDiagnostics(game);
                 game.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
                 startActivity(game);
                 finish();
@@ -126,6 +127,7 @@ public final class MainActivity extends Activity {
             Intent game = new Intent(this, GameActivity.class);
             game.putExtra("game_path", directory.getPath());
             game.putExtra("game_title", request.getStringExtra(ExternalLaunchContract.EXTRA_GAME_TITLE));
+            forwardDiagnostics(game);
             startActivity(game);
             finish();
         } catch (Exception error) {
@@ -164,6 +166,18 @@ public final class MainActivity extends Activity {
             throw new SecurityException("game root is outside the granted tree");
         }
         return root;
+    }
+
+    private void forwardDiagnostics(Intent game) {
+        if ((getApplicationInfo().flags & 2) == 0) return;
+        String namespace=getIntent().getStringExtra("diagnostic_save_namespace");
+        if(namespace!=null){
+            if(!namespace.matches("test-[A-Za-z0-9_-]{1,100}"))
+                throw new IllegalArgumentException("invalid diagnostic save namespace");
+            game.putExtra("diagnostic_save_namespace",namespace);
+        }
+        String mode=getIntent().getStringExtra("diagnostic_mode");
+        if("original".equals(mode)||"local".equals(mode))game.putExtra("diagnostic_mode",mode);
     }
 
     /* JADX INFO: renamed from: lambda$onCreate$0$org-majiro-player-MainActivity, reason: not valid java name */
@@ -576,6 +590,7 @@ public final class MainActivity extends Activity {
             this.library.played(entry);
             DiagnosticLog.write("launch", entry.id + " " + entry.title);
             Intent intentPutExtra = new Intent(this, (Class<?>) GameActivity.class).putExtra("game_tree", entry.tree).putExtra("game_root", entry.root).putExtra("game_title", entry.title).putExtra("game_id", entry.id);
+            forwardDiagnostics(intentPutExtra);
             if ("original".equals(str) || "local".equals(str)) {
                 intentPutExtra.putExtra("diagnostic_mode", str);
             }

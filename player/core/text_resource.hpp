@@ -4,8 +4,19 @@
 #include <map>
 #include <vector>
 #include <cstdint>
+#include <cstring>
 
 namespace majiro {
+inline bool ascii_text_conversion(const std::vector<uint8_t>& bytes,
+                                  const char* from,const char* to){
+    auto compatible=[](const char* charset){
+        return std::strcmp(charset,"windows-31j")==0||std::strcmp(charset,"GBK")==0||
+            std::strcmp(charset,"UTF-8")==0;
+    };
+    if(!compatible(from)||!compatible(to))return false;
+    for(uint8_t byte:bytes)if(byte>=128)return false;
+    return true;
+}
 // A decoding decision is attached to the byte owner, never inferred from bytes.
 struct TextSource {
     std::string scope="original";

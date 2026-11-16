@@ -210,7 +210,7 @@ def main():
     definitions=opcode_table()
     header="#pragma once\n#include <array>\n#include <cstdint>\nnamespace majiro{struct Opcode{uint16_t code;const char* encoding;};\n"
     header+=f"inline constexpr std::array<Opcode,{len(definitions)}> kOpcodes={{{{"
-    header+=",".join(f'{{{code},\"{encoding}\"}}'for code,(_,encoding)in definitions.items())+"}};}\n"
+    header+=",".join(f'{{{code},\"{encoding}\"}}'for code,(_,encoding)in sorted(definitions.items()))+"}};}\n"
     (evidence/"majiro_opcodes.hpp").write_text(header,encoding="ascii")
     executable=evidence/"native_import_probe.exe"
     command=[str(compiler),"/nologo","/std:c++20","/O2","/EHsc","/W4","/WX","/MT","/utf-8",

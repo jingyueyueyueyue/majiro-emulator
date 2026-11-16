@@ -14,6 +14,7 @@ sys.path[:0] = [str(Path(__file__).resolve().parents[1] / part)
 from lua_bridge import create_lua
 from native_pixels import Pixels
 from port_common import ROOT, archive_dir, read_json, sha256, timestamp, write_json
+WORKSPACE=next((parent for parent in ROOT.parents if (parent/"recovered").is_dir()),ROOT.parent)
 
 
 @lru_cache(maxsize=None)
@@ -35,7 +36,7 @@ def versions():
     tools = read_json(ROOT / "reports/android_toolchain.json")
     aapt = Path(tools["sdk"]) / "build-tools/36.0.0/aapt2.exe"
     paths = [
-        ROOT.parent / "resources/recovery/majiro-installed-20261110.apk",
+        WORKSPACE / "resources/recovery/majiro-installed-20261110.apk",
         ROOT / "archive/2026-11/20261111_085150_365770_pre_01_apk_preservation/previous_recovery.apk",
         ROOT / "archive/2026-11/20261111_094450_398963_public_01_release_assets/Majiro-0.1-arm64-v8a.apk",
         ROOT / "archive/2026-11/20261111_release_0_2/Majiro-0.2-arm64-v8a.apk",
@@ -44,11 +45,15 @@ def versions():
         ROOT / "archive/2026-11/20261114_192504_627761_android_release/Majiro-0.2-arm64-v8a.apk",
     ]
     for path in paths:
+        if not path.is_file()and path.is_relative_to(ROOT/"archive"):
+            path=WORKSPACE/"recovered"/path.relative_to(ROOT)
         if not path.is_file():
             raise FileNotFoundError("historical APK required: " + str(path))
         badging = subprocess.check_output([str(aapt), "dump", "badging", str(path)], text=True, encoding="utf8")
         match = re.search(r"^package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'", badging)
-    assert match and match[1].startswith("com.tyranor.runtime.majiro")
+        assert match and match[1]in(
+            "org.majiro.player","org.majiro.player.recovery",
+            "com.tyranor.runtime.majiro","com.tyranor.runtime.majiro.recovery")
         result.append({"name": match[3], "code": int(match[2]), "kind": "apk", "path": str(path),
                        "sha256": sha256(path)})
     manifest=(ROOT/"player/android/AndroidManifest.xml").read_text("utf8")
@@ -211,7 +216,7 @@ def historical_case(version, mode, external, migrate=False):
 
 
 def recovered_objects():
-    path = ROOT.parent / "resources/recovery/app-private-20261110.tar"
+    path = WORKSPACE / "resources/recovery/app-private-20261110.tar"
     lua = create_lua()
     codec = lua.execute((ROOT / "player/runtime/majiro_codec.lua").read_text("utf8"))
     saves = lua.execute((ROOT / "player/runtime/majiro_save.lua").read_text("utf8"))

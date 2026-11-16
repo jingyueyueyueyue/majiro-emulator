@@ -75,6 +75,7 @@ public final class FeatureSourcesChecks {
     Context getContentResolver(){return this;}
     InputStream openInputStream(Path path)throws Exception{return Files.newInputStream(path);}
   }
+  private static InputStream openInput(Path path)throws Exception{return Files.newInputStream(path);}
   private static final class DiagnosticLog {static void write(String a,String b){}}
 """ + java_method(bridge.read_text("utf8")) + """
   public static void main(String[]args)throws Exception {

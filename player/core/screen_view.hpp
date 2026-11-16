@@ -49,12 +49,20 @@ public:
             if (ry > 0) black(0, height-rx-1, width, height-1);
             if (ry < 0) black(0, 0, width, -1-ry);
             dx = -rx; dy = -ry;
-        } else {
-            black(0, 0, width, height);
-            if (kind == Kind::fixed) { dx = -dx; dy = -dy; }
-        }
+        } else if (kind == Kind::fixed) { dx = -dx; dy = -dy; }
         const int64_t x0 = std::max<int64_t>(0, -dx), x1 = std::min<int64_t>(width, width-dx);
         const int64_t y0 = std::max<int64_t>(0, -dy), y1 = std::min<int64_t>(height, height-dy);
+        if (kind != Kind::legacy) {
+            if (x1 <= x0 || y1 <= y0) black(0, 0, width, height);
+            else {
+                // The copied rectangle replaces every pixel inside it. Clear
+                // only exposed borders, avoiding a redundant full-screen fill.
+                black(0, 0, width, y0+dy);
+                black(0, y1+dy, width, height);
+                black(0, y0+dy, x0+dx, y1+dy);
+                black(x1+dx, y0+dy, width, y1+dy);
+            }
+        }
         if (x1 > x0) for (int64_t sy = y0; sy < y1; ++sy) {
             auto src = (size_t(sy) * width + size_t(x0)) * 4;
             auto dst = (size_t(sy+dy) * width + size_t(x0+dx)) * 4;

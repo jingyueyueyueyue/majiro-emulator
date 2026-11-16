@@ -26,18 +26,37 @@ function M.new(options)
   end
   local function next_wake(vm)
     local wait=vm.waiting
+    local delay
     if wait then
       if wait.until_ms then
-        local deadline=wait.kind=='time' and wall_deadline(wait.until_ms)or wait.until_ms
-        if not deadline then return 100 end
-        return math.max(1,math.min(250,deadline-wall_now()))
+        local deadline=wait.until_ms
+        if wait.kind=='time'then deadline=wall_deadline(deadline)end
+        delay=deadline and math.max(1,math.min(250,deadline-wall_now()))or 100
+      elseif wait.kind=='present'or wait.kind=='yield'or wait.kind=='context'then
+        delay=1
+      else delay=100
       end
-      if wait.kind=='present'or wait.kind=='yield'or wait.kind=='context'then return 1 end
-      return 100
+    else
+      delay=(state.ui_waiting or state.reading_wait)and 100 or 1
     end
-    if state.animation_active then return 16 end
-    if state.ui_waiting or state.reading_wait then return 100 end
-    return 1
+    if state.animation_active then delay=math.min(delay,16)end
+    -- The main context can be waiting for input while a source background
+    -- context animates or has a much earlier timer. Sleep for all contexts.
+    if vm.next_deadline then
+      local deadline=vm:next_deadline()
+      if deadline then delay=math.min(delay,math.max(1,deadline-wall_now()))end
+    end
+    for id,thread in pairs(vm.threads or{})do
+      if not thread.finished and #thread.frames>0 then
+        local pending=thread.waiting
+        if id==vm.thread_id then pending=vm.waiting end
+        if not pending or thread.terminate_requested or thread.pending_input or
+            pending.kind=='present'or pending.kind=='yield'or pending.kind=='context'then
+          return 1
+        end
+      end
+    end
+    return delay
   end
   local raw_graphics=options.graphics
   local pixel_mutations={create=true,load=true,load8=true,alpha=true,antidata=true,copy=true,

@@ -47,6 +47,8 @@ def run():
     text = source.read_text("utf8")
     start = text.index("            while (SDL_PollEvent(&event))")
     block = text[start:text.index("            if(quit)break;", start)]
+    virtual_start = text.index("                const int virtual_keys[]=")
+    virtual_block = text[virtual_start:text.index("                if(requested||keys||window_command)", virtual_start)]
     constants = sorted(set(re.findall(r"\bSDL(?:K)?_[A-Z_0-9]+\b", block)))
     stub = r"""
 #include <cassert>
@@ -80,6 +82,9 @@ void process(){SDL_Event event;cursor=0;
 queue.clear();
 }
 SDL_Event event(int type,int key=0){SDL_Event e;e.type=type;e.key.key=key;return e;}
+void virtual_process(int keys){
+// TOUCH KEYS
+}
 int main(){
  queue={event(SDL_EVENT_KEY_DOWN,SDLK_LCTRL)};process();
  assert(key_down[17]&&pressed.size()==1);
@@ -109,13 +114,51 @@ int main(){
  pressed.clear();wheel.wheel.y=0;queue={wheel};process();assert(pressed.empty());
  auto middle=event(SDL_EVENT_MOUSE_BUTTON_DOWN);middle.button.button=-123;
  buttons=held=0;queue={middle};process();assert(buttons==0&&held==0);
- std::cout<<"{\"status\":\"passed\",\"checks\":13}";
+ int checks=13;
+ const int mapped[][2]={{SDLK_RETURN,13},{SDLK_ESCAPE,27},
+  {SDLK_LEFT,37},{SDLK_UP,38},{SDLK_RIGHT,39},{SDLK_DOWN,40},{SDLK_PAGEUP,33},{SDLK_PAGEDOWN,34},
+  {SDLK_SPACE,32},{SDLK_BACKSPACE,8},{SDLK_TAB,9},{SDLK_LCTRL,17},{SDLK_RCTRL,17},
+  {SDLK_LSHIFT,16},{SDLK_RSHIFT,16},{SDLK_LALT,18},{SDLK_RALT,18},{SDLK_CAPSLOCK,20},
+  {'a','A'},{'z','Z'},{'0','0'},{'9','9'}};
+ for(const auto& pair:mapped){
+  key_down.clear();physical_keys.clear();pressed.clear();
+  queue={event(SDL_EVENT_KEY_DOWN,pair[0]),event(SDL_EVENT_KEY_DOWN,pair[0])};process();
+  assert(pressed==std::vector<int>{pair[1]}&&key_down[pair[1]]);++checks;
+  pressed.clear();queue={event(SDL_EVENT_KEY_UP,pair[0])};process();
+  assert(pressed.empty()&&!key_down[pair[1]]&&physical_keys.empty());++checks;
+ }
+ for(int index=0;index<8;++index){
+  pressed.clear();key_down.clear();physical_keys.clear();virtual_process(1<<index);
+  auto touch_pressed=pressed;
+  assert(key_down.empty()&&physical_keys.empty());++checks;
+  pressed.clear();
+  queue={event(SDL_EVENT_KEY_DOWN,mapped[index][0]),event(SDL_EVENT_KEY_UP,mapped[index][0])};process();
+  assert(pressed==touch_pressed&&!key_down[mapped[index][1]]);++checks;
+ }
+ for(const auto& pair:std::vector<std::vector<int>>{{SDLK_LCTRL,SDLK_RCTRL,17},
+       {SDLK_LSHIFT,SDLK_RSHIFT,16},{SDLK_LALT,SDLK_RALT,18}}){
+  key_down.clear();physical_keys.clear();pressed.clear();
+  queue={event(SDL_EVENT_KEY_DOWN,pair[0]),event(SDL_EVENT_KEY_DOWN,pair[1]),
+         event(SDL_EVENT_KEY_UP,pair[0])};process();
+  assert(key_down[pair[2]]&&pressed==std::vector<int>{pair[2]});++checks;
+  pressed.clear();queue={event(SDL_EVENT_KEY_UP,pair[1])};process();
+  assert(!key_down[pair[2]]&&pressed.empty());++checks;
+ }
+ for(int type:{SDL_EVENT_WINDOW_FOCUS_LOST,SDL_EVENT_WILL_ENTER_BACKGROUND}){
+  key_down.clear();physical_keys.clear();pressed.clear();
+  queue={event(SDL_EVENT_KEY_DOWN,SDLK_LCTRL),event(SDL_EVENT_KEY_DOWN,SDLK_LSHIFT),
+         event(SDL_EVENT_KEY_DOWN,SDLK_SPACE),event(type)};process();
+  assert(key_down.empty()&&physical_keys.empty()&&pressed.empty()&&held==0);++checks;
+  queue={event(SDL_EVENT_DID_ENTER_FOREGROUND)};process();
+ }
+ std::cout<<"{\"status\":\"passed\",\"checks\":"<<checks<<"}";
 }
 """
     definitions = "\n".join(f"constexpr int {name}={1000+i};" for i, name in enumerate(constants))
     folder = archive_dir("sdl_input")
     target = folder/"20261111_sdl_input.cpp"
-    target.write_text(stub.replace("// CONSTANTS", definitions).replace("// LOOP", block), encoding="utf8")
+    target.write_text(stub.replace("// CONSTANTS", definitions).replace("// LOOP", block)
+                      .replace("// TOUCH KEYS", virtual_block), encoding="utf8")
     env = msvc_environment()
     executable = folder/"20261111_sdl_input.exe"
     compiler=Path(env["VCTOOLSINSTALLDIR"])/"bin/Hostx64/x64/cl.exe"

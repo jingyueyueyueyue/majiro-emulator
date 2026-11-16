@@ -14,12 +14,14 @@ def run():
     assert api("create 1 64 48 0")=="OK"
     assert api("create 2 32 24 1")=="OK"
     assert api("create 3 32 24 0 8")=="OK"
+    assert api("create 4 32 24 0")=="OK"
     assert api("fill 1 0 0 64 48 3427654")=="OK"
     for y in range(24):
         for x in range(32):
             color=(x*7)+(y*9)*256+((x*13+y*11)%256)*65536
             assert api(f"set 2 {x} {y} {color}")=="OK"
             assert api(f"set 3 {x} {y} {(x*7+y*11)%256}")=="OK"
+            assert api(f"set 4 {x} {y} {color}")=="OK"
     assert api("antidata 2 3")=="OK"
     rows=[
         "2 0 0 32 24 16 12 1 1 0 0 0",
@@ -29,6 +31,7 @@ def run():
         "2 0 0 32 24 12 14 .75 1.2 17 12 1",
         "2 0 0 32 24 100000 100000 1 1 0 0 0",
     ]
+    rows += [f"4 2 1 30 23 -3 8 1 1 0 {anti} 0"for anti in range(256)]
     reference=evidence/(evidence.name[:8]+"_reference.png")
     fast=evidence/(evidence.name[:8]+"_fast.png")
     for row in rows:

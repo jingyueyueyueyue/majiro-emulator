@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -9,6 +11,9 @@ ROOT = Path(__file__).resolve().parents[2]
 ANDROID_NS = "http://schemas.android.com/apk/res/android"
 ACTION = "com.tyranor.runtime.action.LAUNCH"
 PACKAGE = "com.tyranor.runtime.majiro"
+sys.path.insert(0,str(ROOT/"scripts/convert"))
+from port_common import archive_dir,read_json
+from test_audio_preparation_cleanup import method
 
 
 def main() -> int:
@@ -72,6 +77,44 @@ def main() -> int:
         if marker not in contract:
             raise AssertionError(f"external launch protocol is missing {marker}")
 
+    folder=archive_dir("diagnostic_launch")
+    body=method(source,"private void forwardDiagnostics(")
+    fixture=folder/"LaunchChecks.java"
+    fixture.write_text("""
+import java.util.*;
+public class LaunchChecks {
+ static class Intent {
+  final Map<String,String> extras=new HashMap<>();
+  String getStringExtra(String name){return extras.get(name);}
+  void putExtra(String name,String value){extras.put(name,value);}
+ }
+ static class Info{int flags=2;}
+ Info info=new Info();Intent incoming=new Intent();
+ Info getApplicationInfo(){return info;}Intent getIntent(){return incoming;}
+ // METHOD
+ public static void main(String[] args){
+  LaunchChecks owner=new LaunchChecks();Intent game=new Intent();
+  owner.incoming.putExtra("diagnostic_save_namespace","test-isolated");
+  owner.incoming.putExtra("diagnostic_mode","original");owner.forwardDiagnostics(game);
+  if(!game.extras.equals(owner.incoming.extras))throw new AssertionError("diagnostic handoff lost");
+  owner.info.flags=0;game=new Intent();owner.forwardDiagnostics(game);
+  if(!game.extras.isEmpty())throw new AssertionError("release accepted diagnostics");
+  owner.info.flags=2;owner.incoming.putExtra("diagnostic_save_namespace","../games");
+  try{owner.forwardDiagnostics(new Intent());throw new AssertionError("invalid namespace");}
+  catch(IllegalArgumentException expected){}
+  owner.incoming.extras.clear();owner.incoming.putExtra("diagnostic_mode","invalid");
+  game=new Intent();owner.forwardDiagnostics(game);
+  if(!game.extras.isEmpty())throw new AssertionError("invalid mode forwarded");
+  System.out.println("Diagnostic launch: 4 behavior checks passed");
+ }
+}""".replace("// METHOD",body),encoding="utf8")
+    java=Path(read_json(ROOT/"reports/android_toolchain.json")["java"])/"bin"
+    for label,command in (
+        ("compile",[str(java/"javac.exe"),"-d",str(folder),str(fixture)]),
+        ("run",[str(java/"java.exe"),"-cp",str(folder),"LaunchChecks"])):
+        result=subprocess.run(command,capture_output=True,cwd=folder,timeout=30)
+        (folder/(label+".txt")).write_bytes(result.stdout+result.stderr)
+        if result.returncode:raise RuntimeError(label+" diagnostic launch failed: "+str(folder))
     print(f"Android external launch contract passed: {PACKAGE} / {ACTION}")
     return 0
 

@@ -9,6 +9,7 @@
 #include "render_recovery.hpp"
 #include "media_cache.hpp"
 #include "lua_memory.hpp"
+#include "event_wait.hpp"
 #include <jni.h>
 #include <android/log.h>
 #include <unistd.h>
@@ -175,6 +176,7 @@ std::vector<uint8_t> java_read(const std::string& path, bool asset = false, bool
     auto result = native_bytes(bytes); if (bytes) env->DeleteLocalRef(bytes); return result;
 }
 std::string convert(const std::vector<uint8_t>& data, const char* from, const char* to) {
+    if(majiro::ascii_text_conversion(data,from,to))return {data.begin(),data.end()};
     auto bytes = byte_array(data);
     auto first = env->NewStringUTF(from), second = env->NewStringUTF(to);
     auto output = static_cast<jbyteArray>(env->CallStaticObjectMethod(
@@ -243,10 +245,9 @@ std::vector<uint8_t> read_member(const std::string& name,majiro::TextSource* pro
         return overlay;
     }
     const auto indexed=members.find(normalized);
-    const bool archive_image=indexed!=members.end()&&!loose_names.count(normalized)
-        &&majiro::image_archive_member(normalized);
+    const bool indexed_only=indexed!=members.end()&&!loose_names.count(normalized);
     bool loose=false;
-    auto raw=archive_image?std::vector<uint8_t>{}:java_read(name,false,&loose);
+    auto raw=indexed_only?std::vector<uint8_t>{}:java_read(name,false,&loose);
     if(loose)source={"original","loose/"+key(name)};
     else{
         auto found=members.find(key(name));need(found!=members.end(),"resource not found: "+name);
@@ -721,7 +722,9 @@ int text_resource_pinned(lua_State* state){
     const auto name=key(argument(state,1));
     // Archive text is hashed while the source index is built. Loose files
     // take precedence over archive members and still need a direct read.
-    lua_pushboolean(state,!loose_names.count(name)&&archive_text_snapshot.count(name));
+    auto pinned=archive_text_snapshot.find(name);
+    lua_pushboolean(state,!loose_names.count(name)&&pinned!=archive_text_snapshot.end()&&
+        pinned->second.starts_with("original\n"));
     return 1;
 }
 int seal_text_resources(lua_State* state){
@@ -1397,7 +1400,7 @@ majiro::android_host::FrameView screen_frame() {
 majiro::android_host::FrameView movie_frame() {
     return {int(movie_rgba.width),int(movie_rgba.height),&movie_rgba.rgba};
 }
-std::string render_stats() {
+std::string render_stats(bool detailed=true) {
     int output_width=0,output_height=0;
     bool output_ok=renderer&&SDL_GetRenderOutputSize(renderer,&output_width,&output_height);
     auto name=renderer?SDL_GetRendererName(renderer):nullptr;
@@ -1426,13 +1429,13 @@ std::string render_stats() {
        <<",\"screen_dirty\":"<<(presentation.screen.dirty()?"true":"false")
        <<",\"screen_uploads\":"<<presentation.screen.uploads
        <<",\"screen_creations\":"<<presentation.screen.creations
-       <<",\"screen_pixels\":"<<majiro::android_host::pixel_stats(screen_frame())
+       <<",\"screen_pixels\":"<<(detailed?majiro::android_host::pixel_stats(screen_frame()):"null")
        <<",\"movie_surface_active\":"<<(movie_surface_active?"true":"false")
        <<",\"movie_clear_background\":"<<(movie_clear_background?"true":"false")
        <<",\"movie_sequence\":"<<movie_sequence
        <<",\"movie_uploads\":"<<presentation.movie.uploads
        <<",\"movie_creations\":"<<presentation.movie.creations
-       <<",\"movie_pixels\":"<<majiro::android_host::pixel_stats(movie_frame())
+       <<",\"movie_pixels\":"<<(detailed?majiro::android_host::pixel_stats(movie_frame()):"null")
        <<",\"attempts\":"<<presentation.attempts<<",\"presented\":"<<presentation.presented
        <<",\"failures\":"<<presentation.failures
        <<",\"device_resets\":"<<presentation.device_resets
@@ -1462,6 +1465,8 @@ void install_pixels() {
         majiro::android_host::validate_rgba(width,height,pixels);
         bool resized=width!=screen_width||height!=screen_height;
         screen_rgba.swap(pixels);screen_width=width;screen_height=height;++screen_cpu_updates;
+        if(screen_cpu_updates==1)
+            debug("startup phase=first_frame elapsed_ms="+std::to_string(SDL_GetTicks()-startup_started));
         presentation.screen.changed();
         if(resized)need(SDL_SetRenderLogicalPresentation(renderer,width,height,
             SDL_LOGICAL_PRESENTATION_LETTERBOX),SDL_GetError());
@@ -1666,7 +1671,9 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** 
         bool quit = false, paused = false; float x = float(logical_w / 2), y = float(logical_h / 2);
         uint64_t paused_at = 0;
         int held = 0; uint64_t last_debug = 0; uint16_t last_media_error_sequence = 0;
+        majiro::android_host::EventWait event_wait;
         while (!quit) {
+            event_wait.before_poll();
             SDL_Event event; int buttons = 0,input_activity=0;
             std::vector<int> pressed;
             while (SDL_PollEvent(&event)) {
@@ -1795,7 +1802,7 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** 
                 std::ostringstream message;
                 message << "status=" << lua_tostring(lua, -5) << " steps=" << lua_tonumber(lua, -4)
                         << " pages=" << lua_tonumber(lua, -3) << " script=" << lua_tostring(lua, -2);
-                debug(message.str()+" render="+render_stats()); last_debug = SDL_GetTicks();
+                debug(message.str()+" render="+render_stats(false)); last_debug = SDL_GetTicks();
             }
             const int next_wake=int(lua_tonumber(lua,-1));
             lua_pop(lua, 5);
@@ -1821,7 +1828,7 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** 
             // Lua movie waits may have a distant completion deadline. Decoder
             // frame publication must still be sampled at display cadence.
             const int wake_limit=(movie_surface_active||movie_texture_mode)?8:250;
-            SDL_Delay(std::max(1,std::min(wake_limit,next_wake)));
+            event_wait.wait(std::max(1,std::min(wake_limit,next_wake)));
         }
     } catch (const std::exception& error) {
         std::string message = error.what();

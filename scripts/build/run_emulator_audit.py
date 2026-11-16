@@ -28,6 +28,12 @@ EXTRA_SUITES = (
     "test_android_external_launch",
     "test_extboxfill",
     "test_runtime_performance",
+    "test_startup_performance",
+    "test_android_keyboard",
+    "test_android_touch_keys",
+    "test_android_event_wait",
+    "test_original_text_shadow",
+    "test_original_typefaces",
 )
 TEXT_RESOURCE_SUITES = {
     "test_text_mode", "test_patch_manifest", "test_raw_player_patch",
@@ -42,10 +48,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", action="store_true", help="build the PC core/pixels and Android ARM64 libraries once")
     parser.add_argument("--package", action="store_true", help="package the recovery APK after all selected checks pass")
+    parser.add_argument("--package-main",action="store_true",
+                        help="with --package, build the installed runtime module package")
     parser.add_argument("--suite", action="append", choices=tuple(dict.fromkeys((*SUITES,*ORIGINAL_SUITES))))
     parser.add_argument("--jobs", type=int, default=3, choices=range(1, 7))
     parser.add_argument("--case", choices=tuple(dict.fromkeys((*SUITES,*ORIGINAL_SUITES))), help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.package_main and not args.package:
+        parser.error("--package-main requires --package")
     if args.case:
         name = args.case
         sys.argv = [str(ROOT / "scripts/analysis" / (name + ".py"))]
@@ -53,7 +63,8 @@ def main():
         entry = getattr(module, "main", None) or getattr(module, "run")
         result = entry()
         if isinstance(result, dict):
-            return int(result.get("status") in ("failed", "incomplete", "source_changed", "inconclusive"))
+            return int(result.get("status") in (
+                "failed","incomplete","source_changed","inconclusive","partial","running","timeout"))
         return result if isinstance(result, int) else 0
     folder = archive_dir("emulator_audit")
     identity = source_identity()
@@ -135,7 +146,8 @@ def main():
     report["status"] = ("source_changed" if report["source_changed_during_validation"] or report["test_sources_changed"] else
                         "failed" if report["failed_suites"] else "passed")
     if args.package and report["status"] == "passed":
-        row = execute("package_android", "scripts/build/build_android_probe.py", ("--recovery",))
+        row = execute("package_android", "scripts/build/build_android_probe.py",
+                      ()if args.package_main else("--recovery",))
         report["builds"].append(row)
         if row["returncode"]:
             report["status"] = "failed"

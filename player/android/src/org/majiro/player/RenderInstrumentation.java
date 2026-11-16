@@ -12,6 +12,7 @@ import android.os.Bundle;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.lang.reflect.Field;
+import java.nio.ByteBuffer;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -26,6 +27,15 @@ public final class RenderInstrumentation extends Instrumentation {
             bitmap.compress(Bitmap.CompressFormat.PNG,100,output);
         }
     }
+    private static int[] alpha(Bitmap bitmap){
+        int stride=bitmap.getRowBytes(),width=bitmap.getWidth(),height=bitmap.getHeight();
+        byte[] bytes=new byte[stride*height];
+        bitmap.copyPixelsToBuffer(ByteBuffer.wrap(bytes));
+        int[] result=new int[width*height];
+        for(int y=0;y<height;++y)for(int x=0;x<width;++x)
+            result[y*width+x]=bytes[y*stride+x]&255;
+        return result;
+    }
     @Override public void onStart(){
         Bundle result=new Bundle();JSONArray cases=new JSONArray();
         try{
@@ -34,23 +44,26 @@ public final class RenderInstrumentation extends Instrumentation {
             String[] samples={"中文顶端完整，保持笔画。","「日本語の高い文字」",
                               "ÉÅgjpq国高雪冒瞥","“翻译后的对白”：测试"};
             int clippedLegacy=0;
-            for(String family:new String[]{"sans-serif","serif"})
+            for(String family:new String[]{"sans-serif","serif","MS PGothic"})
             for(int style:new int[]{Typeface.NORMAL,Typeface.BOLD})
             for(int height:new int[]{16,20,24,30,36})
             for(int quality:new int[]{1,4})
             for(String text:samples){
-                Typeface typeface=Typeface.create(family,style);
+                Typeface base=OriginalTypefaces.resolve(context,family);
+                Typeface typeface=base==null?Typeface.create(family,style):Typeface.create(base,style);
                 field("customTypeface").set(null,typeface);
                 field("fontQualityMode").setInt(null,quality==1?0:1);
                 int[] codepoints=text.codePoints().toArray(),steps=new int[codepoints.length];
                 java.util.Arrays.fill(steps,height);
-                int[] production=GameBridge.glyphs("",height,steps,text,false);
+                int[] production=GameBridge.glyphs("__majiro_style__"+style+":"+family,
+                    height,steps,text,false);
                 Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.SUBPIXEL_TEXT_FLAG);
+                paint.setTextLocale(java.util.Locale.JAPANESE);
                 paint.setTypeface(typeface);paint.setTextSize(height*quality);paint.setColor(Color.WHITE);
                 GlyphCell cell=GlyphCell.measure(paint,codepoints,height*quality,quality);
                 int width=production[0],guard=height*quality*2;
-                Bitmap padded=Bitmap.createBitmap(width*quality+2*guard,height*quality+2*guard,Bitmap.Config.ARGB_8888);
-                Bitmap legacy=Bitmap.createBitmap(width*quality+2*guard,height*quality+2*guard,Bitmap.Config.ARGB_8888);
+                Bitmap padded=Bitmap.createBitmap(width*quality+2*guard,height*quality+2*guard,Bitmap.Config.ALPHA_8);
+                Bitmap legacy=Bitmap.createBitmap(width*quality+2*guard,height*quality+2*guard,Bitmap.Config.ALPHA_8);
                 Canvas canvas=new Canvas(padded),oldCanvas=new Canvas(legacy);
                 Paint.FontMetrics fm=paint.getFontMetrics();
                 float oldBaseline=-fm.ascent,measured=fm.descent-fm.ascent;
@@ -66,24 +79,24 @@ public final class RenderInstrumentation extends Instrumentation {
                     oldCanvas.scale(sx,1);oldCanvas.drawText(glyph,0,oldBaseline,paint);oldCanvas.restore();
                     x+=height;
                 }
-                int[] pixels=new int[padded.getWidth()*padded.getHeight()],oldPixels=new int[pixels.length];
-                padded.getPixels(pixels,0,padded.getWidth(),0,0,padded.getWidth(),padded.getHeight());
-                legacy.getPixels(oldPixels,0,legacy.getWidth(),0,0,legacy.getWidth(),legacy.getHeight());
+                int[] pixels=alpha(padded),oldPixels=alpha(legacy);
                 long lost=0,oldLost=0;
                 for(int y=0;y<padded.getHeight();++y)for(int xx=0;xx<padded.getWidth();++xx){
                     if(y<guard||y>=guard+height*quality){
-                        lost+=pixels[y*padded.getWidth()+xx]>>>24;
-                        oldLost+=oldPixels[y*padded.getWidth()+xx]>>>24;
+                        lost+=pixels[y*padded.getWidth()+xx];
+                        oldLost+=oldPixels[y*padded.getWidth()+xx];
                     }
                 }
                 if(lost!=0)throw new AssertionError("glyph ink escaped fixed cell: "+family+"/"+height+"/"+quality);
                 for(int y=0;y<height;++y)for(int xx=0;xx<width;++xx){
                     int sum=0;
                     for(int yy=0;yy<quality;++yy)for(int sx=0;sx<quality;++sx)
-                        sum+=pixels[(guard+y*quality+yy)*padded.getWidth()+guard+xx*quality+sx]>>>24;
+                        sum+=pixels[(guard+y*quality+yy)*padded.getWidth()+guard+xx*quality+sx];
                     int expected=(sum+quality*quality/2)/(quality*quality);
                     if(production[2+y*width+xx]!=expected)
-                        throw new AssertionError("production glyph differs from complete padded reference");
+                        throw new AssertionError("production glyph differs from complete padded reference: "+
+                            family+"/"+style+"/"+height+"/"+quality+" at "+xx+","+y+
+                            " actual="+production[2+y*width+xx]+" expected="+expected);
                 }
                 if(oldLost>0)++clippedLegacy;
                 JSONObject row=new JSONObject();

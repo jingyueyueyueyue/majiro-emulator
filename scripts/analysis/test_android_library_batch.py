@@ -20,6 +20,8 @@ COMPONENT=PACKAGE+"/org.majiro.player.MainActivity"
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serial",default="ea615a82")
+    parser.add_argument("--package",default=PACKAGE,
+                        choices=("com.tyranor.runtime.majiro","com.tyranor.runtime.majiro.recovery"))
     parser.add_argument("--repeats",type=int,default=2)
     parser.add_argument("--seconds",type=int,default=90)
     parser.add_argument("--observe-seconds",type=float,default=20,
@@ -33,7 +35,11 @@ def main():
     parser.add_argument("--game",action="append")
     parser.add_argument("--mode",action="append",choices=("current","original","local"))
     parser.add_argument("--resume-report",type=Path,help="Reuse passed cases only for the identical installed APK.")
+    parser.add_argument("--profile-startup",action="store_true",
+                        help="Record 16 seconds of CPU samples with the device's simpleperf.")
     args=parser.parse_args()
+    package=args.package
+    component=package+"/org.majiro.player.MainActivity"
     adb=Path(read_json(ROOT/"reports/android_toolchain.json")["sdk"])/"platform-tools/adb.exe"
     base=[str(adb),"-s",args.serial]
     folder=archive_dir("android_library_batch")
@@ -45,7 +51,8 @@ def main():
         p=subprocess.run([*base,*arguments],capture_output=True,timeout=timeout)
         if p.returncode:raise RuntimeError(p.stderr.decode("utf8","replace"))
         return p.stdout
-    command("forward","tcp:43217","localabstract:majiro-debug-recovery")
+    debug_socket=("majiro-debug-recovery"if package.endswith(".recovery")else"majiro-debug-"+package)
+    command("forward","tcp:43217","localabstract:"+debug_socket)
     def debug(query):
         with socket.create_connection(("127.0.0.1",43217),timeout=2)as client:
             client.sendall((query+"\n").encode());data=bytearray()
@@ -66,16 +73,16 @@ def main():
     command("shell","svc","power","stayon","true")
     command("shell","input","keyevent","224")
     command("shell","wm","dismiss-keyguard")
-    installed=command("shell","pm","path",PACKAGE).decode("utf8").strip().splitlines()[0].removeprefix("package:")
+    installed=command("shell","pm","path",package).decode("utf8").strip().splitlines()[0].removeprefix("package:")
     installed_sha256=command("shell","sha256sum",installed).decode("ascii").split()[0]
     build=read_json(ROOT/"reports/android_probe_build.json")
     if installed_sha256!=build["sha256"]:raise RuntimeError("tablet APK differs from the current build")
-    command("shell","am","force-stop",PACKAGE)
+    command("shell","am","force-stop",package)
     namespace="test-"+folder.name
     generated_saves="files/diagnostic-saves/"+namespace
     guard={"original":"files/games","generated":generated_saves,"namespace":namespace,"status":"preparing"}
     def private(*args,check=True):
-        result=subprocess.run([*base,"shell",shlex.join(["run-as",PACKAGE,*args])],
+        result=subprocess.run([*base,"shell",shlex.join(["run-as",package,*args])],
                               capture_output=True,timeout=45)
         if check and result.returncode:raise RuntimeError(result.stderr.decode("utf8","replace"))
         return result
@@ -87,18 +94,18 @@ def main():
     write_json(folder/"save_isolation.json",guard)
     def restore_saves():
         if guard["status"]!="isolated":return
-        command("shell","am","force-stop",PACKAGE)
+        command("shell","am","force-stop",package)
         guard["status"]="player_saves_restored"
         write_json(folder/"save_isolation.json",guard)
         archive=folder/"test_generated_saves.tar"
         with archive.open("wb")as output:
-            result=subprocess.run([*base,"exec-out","run-as",PACKAGE,"tar","-cf","-",generated_saves],
+            result=subprocess.run([*base,"exec-out","run-as",package,"tar","-cf","-",generated_saves],
                                   stdout=output,stderr=subprocess.PIPE,timeout=45)
         if result.returncode:raise RuntimeError("test saves preserved on device; archive transfer failed")
         import tarfile
-        with tarfile.open(archive)as package:
+        with tarfile.open(archive)as saved_archive:
             assert all(member.name==generated_saves or member.name.startswith(generated_saves+"/")
-                       for member in package.getmembers())
+                       for member in saved_archive.getmembers())
         # Exact tool-owned test directory only, after the real save root is back
         # and a readable local archive of generated test files is present.
         assert generated_saves.startswith("files/diagnostic-saves/test-2026")and".."not in generated_saves
@@ -115,7 +122,7 @@ def main():
         if previous.get("minimum_session_seconds",0)<args.min_session_seconds:raise RuntimeError("resume session is weaker")
     reused={(row["game"],row["mode"],row["repeat"]):row for row in previous.get("cases",[])
             if row.get("status")=="passed"}
-    report={"status":"running","timestamp":timestamp(),"application_id":PACKAGE,"cases":[],
+    report={"status":"running","timestamp":timestamp(),"application_id":package,"cases":[],
             "apk_sha256":installed_sha256,"version_name":build["version_name"],"version_code":build["version_code"],
             "modes":modes,"expected_cases":len(games)*len(modes)*args.repeats,
             "observe_seconds":args.observe_seconds,"required_story_pages":args.pages,
@@ -137,36 +144,46 @@ def main():
             row={"game":game["id"],"repeat":repeat,"mode":mode,"status":"running"}
             safe=re.sub("[^a-zA-Z0-9_-]","_",game["id"])+"_"+mode+"_"+str(repeat)
             try:
-                command("shell","am","force-stop",PACKAGE)
+                command("shell","am","force-stop",package)
                 log_since=command("shell","date","+%m-%d %H:%M:%S.000").decode("ascii").strip()
                 root="primary:Download/MajiroGames/"+game["device_directory"]
-                launch=["shell","am","start","-W","-n",COMPONENT,"--es","diagnostic_root",root]
+                launch=["shell","am","start","-W","-n",component,"--es","diagnostic_root",root]
                 launch+=["--es","diagnostic_save_namespace",namespace]
                 if mode!="current":launch+=["--es","diagnostic_mode",mode]
                 output=command(*launch)
                 (folder/(safe+"_start.txt")).write_bytes(output)
                 last=None;status=None;render=None;stable=0;last_log=0;last_memory=0;seen_pid=None
+                profiler=None;profile_log=None
+                device_perf="/data/local/tmp/majiro-"+folder.name+"-"+safe+".perf"
                 row["memory_samples"]=[]
+                row["timeline"]=[]
                 first_boundary=None;first_read=None;last_action=0;selected={};actions=[]
                 row["actions"]=actions;row["story_pages"]=0
                 while time.monotonic()-began<args.seconds:
                     if time.monotonic()-last_log>=2:
                         last_log=time.monotonic()
-                        process=subprocess.run([*base,"shell","pidof",PACKAGE+":game"],
+                        process=subprocess.run([*base,"shell","pidof",package+":game"],
                                                capture_output=True,timeout=5)
                         pid=process.stdout.decode("ascii").strip()
                         if seen_pid and pid!=seen_pid:
                             raise RuntimeError("game process exited or restarted during sustained playback")
                         if pid:
                             seen_pid=pid
+                            if args.profile_startup and profiler is None:
+                                profile_log=(folder/(safe+"_simpleperf.txt")).open("wb")
+                                profiler=subprocess.Popen([*base,"shell",shlex.join([
+                                    "/system/bin/simpleperf","record","--app",package,"-e","cpu-clock",
+                                    "-f","997","--call-graph","fp","-p",pid,"--duration","16",
+                                    "-o",device_perf])],
+                                    stdout=profile_log,stderr=subprocess.STDOUT)
                             if time.monotonic()-last_memory>=5:
                                 last_memory=time.monotonic()
-                                raw=command("shell","run-as",PACKAGE,"cat","/proc/"+pid+"/status").decode("ascii")
+                                raw=command("shell","run-as",package,"cat","/proc/"+pid+"/status").decode("ascii")
                                 memory={"seconds":round(time.monotonic()-began,2),"pid":int(pid)}
                                 for key in ("VmRSS","VmSize","VmData","VmSwap","Threads"):
                                     match=re.search(r"^"+key+r":\s+(\d+)",raw,re.M)
                                     if match:memory[key]=int(match[1])
-                                maps=command("shell","run-as",PACKAGE,"wc","-l","/proc/"+pid+"/maps")
+                                maps=command("shell","run-as",package,"wc","-l","/proc/"+pid+"/maps")
                                 memory["map_count"]=int(maps.split()[0])
                                 row["memory_samples"].append(memory)
                                 write_json(folder/(safe+"_memory.json"),row["memory_samples"])
@@ -184,6 +201,16 @@ def main():
                         available=pixels.get("available",False)and pixels.get("visible_nonblack_pixels",0)>0
                         frame=json.dumps([f["script"]for f in status.get("frames",[])],sort_keys=True)
                         at_wait=status.get("ui_waiting")or status.get("reading_wait")
+                        marker=[frame,bool(status.get("ui_waiting")),bool(status.get("reading_wait")),
+                                status.get("reading_generation",0)]
+                        if not row["timeline"] or row["timeline"][-1]["marker"]!=marker:
+                            row["timeline"].append({"seconds":round(time.monotonic()-began,3),
+                                "marker":marker,"steps":status.get("steps"),"vm_us":render.get("vm_us"),
+                                "image_misses":render.get("image_cache_misses")})
+                        if at_wait and available:
+                            row.setdefault("first_input_seconds",round(time.monotonic()-began,3))
+                        if status.get("reading_wait") and available:
+                            row.setdefault("first_reading_seconds",round(time.monotonic()-began,3))
                         if at_wait and available:
                             stable=stable+1 if frame==last else 1
                             if stable>=4 and first_boundary is None:first_boundary=time.monotonic()
@@ -231,7 +258,8 @@ def main():
                                         area=areas[attempt];selected[signature]=attempt+1
                                         x=area["x"]+area["width"]/2;y=area["y"]+area["height"]/2
                                         debug(f"MOVE {x:g} {y:g}");time.sleep(.08);debug(f"CLICK {x:g} {y:g} 1")
-                                        actions.append({"kind":"source_menu","area":area,"frames":frame})
+                                        actions.append({"kind":"source_menu","area":area,"frames":frame,
+                                                        "seconds":round(time.monotonic()-began,3)})
                                         last_action=time.monotonic()
                         else:
                             stable=0
@@ -242,12 +270,32 @@ def main():
                 row["status"]="passed"if row["status"]=="passed"else"timeout"
                 row["observed_after_first_boundary_seconds"]=round(time.monotonic()-first_boundary,2)if first_boundary is not None else 0
                 row["vm"]=status;row["render"]=render
+                logs=command("logcat","-d","-T",log_since,"--pid="+seen_pid,"-v","brief","-s",
+                             "MajiroPlayer:V").decode("utf8","replace")if seen_pid else ""
+                phases={}
+                for name,elapsed in re.findall(r"startup phase=(\w+) elapsed_ms=(\d+)",logs):
+                    phases.setdefault(name,int(elapsed))
+                row["startup_phases_ms"]=phases
+                if status:
+                    roots=private("find",generated_saves,"-type","d").stdout.decode("utf8","replace")
+                    if "/games/" not in roots:
+                        raise RuntimeError("diagnostic save namespace did not reach GameBridge")
                 image=command("exec-out","screencap","-p")
                 (folder/(safe+".png")).write_bytes(image)
                 row["screenshot"]=str((folder/(safe+".png")).relative_to(ROOT))
+                if profiler is not None:
+                    profiler.wait(timeout=25);profile_log.close()
+                    if profiler.returncode:raise RuntimeError("startup CPU sampling failed")
+                    perf=folder/(safe+".perf")
+                    command("pull",device_perf,str(perf))
+                    command("shell","rm","-f",device_perf)
+                    row["cpu_profile"]=str(perf.relative_to(ROOT))
                 # UI waits alone do not validate layering; retain screenshots
                 # and per-frame statistics for the final visual review.
             except Exception as error:
+                if locals().get("profiler") is not None:
+                    profiler.wait(timeout=25)
+                    if profile_log:profile_log.close()
                 row.update(status="failed",error=str(error))
                 try:
                     (folder/(safe+"_failed.png")).write_bytes(command("exec-out","screencap","-p"))

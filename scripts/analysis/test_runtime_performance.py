@@ -8,6 +8,7 @@ import time
 
 from lua_bridge import create_lua
 from test_screen_semantics import Portable
+from audit_player_semantics import registered_providers
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "convert"))
 from port_common import ROOT, archive_dir, read_json, sha256, timestamp, write_json
@@ -15,6 +16,39 @@ from port_common import ROOT, archive_dir, read_json, sha256, timestamp, write_j
 
 def run():
     folder = archive_dir("runtime_performance")
+    scheduler_lua, _, _, system=registered_providers(overrides={"now":lambda:100})
+    scheduler_lua.globals()["SYSTEM"]=system
+    scheduler_lua.globals()["VM"]=scheduler_lua.execute(
+        (ROOT/"player/runtime/majiro_vm.lua").read_text(encoding="utf8"))
+    scheduler_lua.globals()["OPS"]=scheduler_lua.execute(
+        (ROOT/"player/tables/opcodes.lua").read_text(encoding="utf8"))
+    scheduler_lua.execute("""
+      local script={name='wake.mjo',main=0,functions={{55,100}},
+        code={{0,0x191},{2,0x82c,0},{100,0x191},{102,0x82c,100}}}
+      local vm=VM.new{opcodes=OPS,loader=function()return script end,
+        syscall=SYSTEM.invoke,wall_deadline=SYSTEM.wall_deadline}
+      vm:begin(script.name)
+      vm.waiting={kind='time',until_ms=1100}
+      assert(SYSTEM.next_wake(vm)==250)
+      SYSTEM.state.animation_active=true
+      assert(SYSTEM.next_wake(vm)==16,'long source wait starved sprite animation')
+      SYSTEM.state.animation_active=false
+      assert(vm:spawn(55,{},false)==2)
+      vm:select_thread(2);vm.waiting={kind='time',until_ms=107};vm:select_thread(1)
+      vm.waiting={kind='input'}
+      assert(SYSTEM.next_wake(vm)==7,'background timer hidden by main input wait')
+      vm:select_thread(2);vm.waiting=nil;vm:select_thread(1)
+      assert(SYSTEM.next_wake(vm)==1,'runnable background context overslept')
+      vm:select_thread(2);vm.waiting={kind='yield'};vm:select_thread(1)
+      assert(SYSTEM.next_wake(vm)==1,'background yield overslept')
+      vm.threads[2].finished=true
+      assert(SYSTEM.next_wake(vm)==100,'idle main context busy polled')
+      SYSTEM.providers['$time_accera'](vm,{2})
+      vm.waiting={kind='time',until_ms=110}
+      assert(SYSTEM.next_wake(vm)==5,'virtual deadline did not convert to wall time')
+      SYSTEM.providers['$time_accera'](vm,{0})
+      assert(SYSTEM.next_wake(vm)==100,'stopped virtual clock spun')
+    """)
     lua = create_lua()
     lua.globals()["CONFIGURATION"] = lua.execute(
         (ROOT / "player/runtime/player_configuration.lua").read_text(encoding="utf8"))
@@ -113,12 +147,14 @@ public class MovieFrameChecks {
             raise RuntimeError(name + ": " + result.stderr.decode("utf8", "replace"))
     report = {
         "status": "passed", "timestamp": timestamp(), "lazy_asset_checks": 9,
+        "scheduler_checks": 8,
         "video_transfer_checks": 5, "idle_present_calls": 200,
         "idle_present_ms": round(unchanged_ms, 3),
         "scope": "production Lua configuration, portable page composition and Java video byte packing",
         "device_accessed": False,
         "source_sha256": {name: sha256(ROOT / name) for name in (
-            "player/runtime/player_configuration.lua", "player/native/majiro_pixels.cpp",
+            "player/runtime/player_configuration.lua", "player/runtime/majiro_syscalls.lua",
+            "player/native/majiro_pixels.cpp",
             "player/core/portable_pixels_wrapper.inc",
             "player/android/src/org/majiro/player/MovieFramePixels.java")},
         "evidence": str(folder),

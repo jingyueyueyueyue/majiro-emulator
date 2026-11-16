@@ -15,6 +15,7 @@ STUBS = {
  public static void killProcess(int pid){if(pid!=1234)throw new AssertionError();killed++;}
 }""",
 "android/os/Bundle.java": "package android.os; public class Bundle{}",
+"android/os/SystemClock.java": "package android.os;public class SystemClock{public static long uptimeMillis(){return 1000;}}",
 "android/os/Build.java": "package android.os; public class Build{public static class VERSION{public static int SDK_INT=36;}}",
 "android/os/Looper.java": """package android.os; public class Looper{
  public static final Looper MAIN=new Looper();public static boolean ui=true;
@@ -29,9 +30,37 @@ public class DocumentsContract{public static String getTreeDocumentId(android.ne
 "android/view/WindowManager.java": "package android.view; public class WindowManager{public static class LayoutParams{public static int FLAG_KEEP_SCREEN_ON=128;}}",
 "android/view/Window.java": "package android.view; public class Window{public void addFlags(int flags){}}",
 "android/view/KeyEvent.java": """package android.view;public class KeyEvent{
- public static final int KEYCODE_BACK=4,ACTION_UP=1,ACTION_DOWN=0;private int action;private boolean cancelled;
- public KeyEvent(int action,boolean cancelled){this.action=action;this.cancelled=cancelled;}
- public int getKeyCode(){return KEYCODE_BACK;}public int getAction(){return action;}public boolean isCanceled(){return cancelled;}
+ public static final int KEYCODE_BACK=4,ACTION_UP=1,ACTION_DOWN=0,ACTION_MULTIPLE=2,FLAG_SOFT_KEYBOARD=2,FLAG_CANCELED=32;
+ public static final int KEYCODE_0=7,KEYCODE_9=16,KEYCODE_A=29,KEYCODE_Z=54;
+ public static final int KEYCODE_DPAD_UP=19,KEYCODE_DPAD_DOWN=20,KEYCODE_DPAD_LEFT=21,KEYCODE_DPAD_RIGHT=22;
+ public static final int KEYCODE_ALT_LEFT=57,KEYCODE_ALT_RIGHT=58,KEYCODE_SHIFT_LEFT=59,KEYCODE_SHIFT_RIGHT=60;
+ public static final int KEYCODE_TAB=61,KEYCODE_SPACE=62,KEYCODE_ENTER=66,KEYCODE_DEL=67;
+ public static final int KEYCODE_PAGE_UP=92,KEYCODE_PAGE_DOWN=93,KEYCODE_ESCAPE=111;
+ public static final int KEYCODE_CTRL_LEFT=113,KEYCODE_CTRL_RIGHT=114,KEYCODE_CAPS_LOCK=115,KEYCODE_NUMPAD_ENTER=160;
+ private int action,key,device,source,flags,repeat;private boolean cancelled;
+ public KeyEvent(int action,boolean cancelled){this(action,KEYCODE_BACK,1,257,0,0,cancelled);}
+ public KeyEvent(int action,int key,int device,int source,int flags,int repeat,boolean cancelled){
+  this.action=action;this.key=key;this.device=device;this.source=source;this.flags=flags;this.repeat=repeat;this.cancelled=cancelled;
+ }
+ public KeyEvent(long downTime,long eventTime,int action,int key,int repeat,int meta,int device,int scan,int flags,int source){
+  this(action,key,device,source,flags,repeat,(flags&FLAG_CANCELED)!=0);
+ }
+ public int getKeyCode(){return key;}public int getAction(){return action;}public boolean isCanceled(){return cancelled;}
+ public int getDeviceId(){return device;}public int getFlags(){return flags;}public int getRepeatCount(){return repeat;}
+ public int getSource(){return source;}public boolean isFromSource(int mask){return (source&mask)==mask;}
+ public InputDevice getDevice(){return InputDevice.getDevice(device);}
+}""",
+"android/view/InputDevice.java": """package android.view;public class InputDevice{
+ public static final int SOURCE_KEYBOARD=257;public int getSources(){return SOURCE_KEYBOARD;}
+ public static InputDevice getDevice(int id){return id>0?new InputDevice():null;}
+}""",
+"android/hardware/input/InputManager.java": """package android.hardware.input;public class InputManager{
+ public interface InputDeviceListener{void onInputDeviceAdded(int device);void onInputDeviceChanged(int device);void onInputDeviceRemoved(int device);}
+ public InputDeviceListener listener;public int registered,unregistered;
+ public void registerInputDeviceListener(InputDeviceListener listener,Object handler){this.listener=listener;registered++;}
+ public void unregisterInputDeviceListener(InputDeviceListener listener){
+  if(this.listener!=listener)throw new AssertionError();this.listener=null;unregistered++;
+ }
 }""",
 "android/window/OnBackInvokedCallback.java": "package android.window; public interface OnBackInvokedCallback{void onBackInvoked();}",
 "android/window/OnBackInvokedDispatcher.java": """package android.window;public class OnBackInvokedDispatcher{
@@ -62,13 +91,17 @@ public class AlertDialog implements DialogInterface{
 }""",
 "android/app/Activity.java": """package android.app;import java.util.ArrayList;
 public class Activity{
- public int finishes,pauses,resumes,destroys,superBack;private boolean finishing;
+ public static final String INPUT_SERVICE="input";
+ public int finishes,pauses,resumes,destroys,superBack,superKeys;private boolean finishing;
+ public final android.hardware.input.InputManager inputManager=new android.hardware.input.InputManager();
  public final ArrayList<Runnable> queue=new ArrayList<Runnable>();
  public final android.window.OnBackInvokedDispatcher dispatcher=new android.window.OnBackInvokedDispatcher();
  protected void onCreate(android.os.Bundle b){}protected void onPause(){pauses++;}
  protected void onResume(){resumes++;}protected void onDestroy(){destroys++;}
  protected void onActivityResult(int a,int b,android.content.Intent c){}
- public void onBackPressed(){superBack++;finish();}public boolean dispatchKeyEvent(android.view.KeyEvent e){return false;}
+ public void onBackPressed(){superBack++;finish();}public boolean dispatchKeyEvent(android.view.KeyEvent e){superKeys++;return false;}
+ public void onWindowFocusChanged(boolean focused){}
+ public Object getSystemService(String name){return INPUT_SERVICE.equals(name)?inputManager:null;}
  public void finish(){finishes++;finishing=true;}public boolean isFinishing(){return finishing;}
  public boolean isDestroyed(){return destroys>0;}public void runOnUiThread(Runnable r){if(android.os.Looper.ui)r.run();else queue.add(r);}
  public void drain(){android.os.Looper.ui=true;for(Runnable r:new ArrayList<Runnable>(queue))r.run();queue.clear();}
@@ -77,7 +110,13 @@ public class Activity{
  public android.window.OnBackInvokedDispatcher getOnBackInvokedDispatcher(){return dispatcher;}
 }""",
 "org/libsdl/app/SDLActivity.java": """package org.libsdl.app;public class SDLActivity extends android.app.Activity{
- protected static Thread mSDLThread;public static int quit;
+ protected static Thread mSDLThread;protected static Object mSurface=new Object();
+ protected static boolean mBrokenLibraries;public static int quit;
+ public static final java.util.ArrayList<String> keyEvents=new java.util.ArrayList<>();
+ public static void onNativeKeyUp(int key){keyEvents.add("up:"+key);}
+ public static boolean handleKeyEvent(Object view,int key,android.view.KeyEvent event,Object connection){
+  keyEvents.add("down:"+key);return true;
+ }
  public static void thread(Thread t){mSDLThread=t;}public static void nativeSendQuit(){quit++;}
  protected String[] getLibraries(){return new String[0];}protected String[] getArguments(){return new String[0];}
 }""",
@@ -98,6 +137,8 @@ final class GameSettingsOverlay{
  static GameSettingsOverlay latest;boolean showing;int closed;
  GameSettingsOverlay(GameActivity owner){latest=this;}
  boolean dismiss(){boolean was=showing;showing=false;return was;}
+ boolean isShowing(){return showing;}
+ void releaseTouchKeys(){}
  void close(){showing=false;closed++;}
 }""",
 "org/majiro/player/DiagnosticLog.java": """package org.majiro.player;public class DiagnosticLog{

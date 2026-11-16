@@ -95,7 +95,7 @@ def run():
         assert api(f"create {page} {width} {size} 0")==api(f"alpha {page} {mask} 0")=="OK"
         assert api(f"fill {mask} 0 0 {width} {size} 255")=="OK"
         advances=" ".join([str(size)]*len(text))
-        assert api(f"glyphs {page} 0 0 {size} {size//2} 16777215 0\nSource Han Sans SC\n{advances}\n{text}").startswith("OK")
+        assert api(f"glyphs {page} 0 0 {size} {size//2} 16777215 4294967295\nSource Han Sans SC\n{advances}\n{text}").startswith("OK")
         path=evidence/f"20261109_complete_{size}.png"
         assert api(f"png {page} {path}")=="OK"
         actual=np.asarray(Image.open(path).convert("RGBA"))[:,:,3]
