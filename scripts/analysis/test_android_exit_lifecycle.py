@@ -241,7 +241,8 @@ def main():
     import xml.etree.ElementTree as ET
     manifest=ET.parse(ROOT/"player/android/AndroidManifest.xml").getroot()
     android="{http://schemas.android.com/apk/res/android}"
-    game=next(node for node in manifest.findall("./application/activity")if node.get(android+"name")==".GameActivity")
+    game=next(node for node in manifest.findall("./application/activity")
+              if node.get(android+"name") in (".GameActivity", "org.majiro.player.GameActivity"))
     assert game.get(android+"process")==":game","process cleanup must never target the library process"
     boot = (ROOT / "player/runtime/player_boot.lua").read_text(encoding="utf8")
     system = (ROOT / "player/runtime/majiro_syscalls.lua").read_text(encoding="utf8")

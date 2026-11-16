@@ -13,7 +13,7 @@ import time
 sys.path[:0]=[str(Path(__file__).resolve().parents[1]/"convert")]
 from port_common import ROOT,archive_dir,read_json,write_json,timestamp
 
-PACKAGE="org.majiro.player.recovery"
+PACKAGE="com.tyranor.runtime.majiro.recovery"
 COMPONENT=PACKAGE+"/org.majiro.player.MainActivity"
 
 

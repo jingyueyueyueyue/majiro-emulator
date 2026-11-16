@@ -48,7 +48,7 @@ def versions():
             raise FileNotFoundError("historical APK required: " + str(path))
         badging = subprocess.check_output([str(aapt), "dump", "badging", str(path)], text=True, encoding="utf8")
         match = re.search(r"^package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'", badging)
-        assert match and match[1].startswith("org.majiro.player")
+    assert match and match[1].startswith("com.tyranor.runtime.majiro")
         result.append({"name": match[3], "code": int(match[2]), "kind": "apk", "path": str(path),
                        "sha256": sha256(path)})
     manifest=(ROOT/"player/android/AndroidManifest.xml").read_text("utf8")

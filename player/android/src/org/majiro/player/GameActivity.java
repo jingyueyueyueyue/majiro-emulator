@@ -87,6 +87,8 @@ public final class GameActivity extends SDLActivity {
         return new String[] {"SDL3", "majiro_game"};
     }
     @Override protected String[] getArguments() {
+        String path=getIntent().getStringExtra("game_path");
+        if(path!=null&&!path.isEmpty())return new String[] {path,""};
         String uri=getIntent().getStringExtra("game_tree"),root=getIntent().getStringExtra("game_root");
         if(root!=null&&root.equals(android.provider.DocumentsContract.getTreeDocumentId(android.net.Uri.parse(uri))))root="";
         return new String[] {uri,root==null?"":root};
@@ -95,7 +97,12 @@ public final class GameActivity extends SDLActivity {
         try {
             DiagnosticLog.initialize(this);
             DiagnosticLog.write("game","launch "+getIntent().getStringExtra("game_title"));
-            GameBridge.open(this,getIntent().getStringExtra("game_tree"),getIntent().getStringExtra("game_root"));
+            String path=getIntent().getStringExtra("game_path");
+            if(path!=null&&!path.isEmpty()) {
+                GameBridge.open(this, "file://" + path, null);
+            } else {
+                GameBridge.open(this,getIntent().getStringExtra("game_tree"),getIntent().getStringExtra("game_root"));
+            }
         } catch (Exception error) {
             // Let the native owner show its normal error dialog and cleanly
             // return to the library instead of crashing during Activity setup.

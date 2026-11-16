@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "convert"))
 from port_common import ROOT, archive_dir, read_json, timestamp, write_json
 
 REMOTE = "/sdcard/Download/MajiroGames"
+PACKAGE = "com.tyranor.runtime.majiro"
 TITLES = {
     "narci_himeko": "水仙 · 姬子", "narci_iris": "水仙 · 爱丽丝",
     "narci_onetwo": "水仙 1 & 2", "narci_sumire": "水仙 · 菫", "narci_zero": "水仙 · 零",
@@ -35,14 +36,14 @@ def digest(path):
 
 def verify_installed_apk(run,apk):
     """A built file is not a delivered fix until the tablet's bytes agree."""
-    paths=run(["shell","pm","path","org.majiro.player"],timeout=20).splitlines()
+    paths=run(["shell","pm","path",PACKAGE],timeout=20).splitlines()
     base=next((line[len("package:"):]for line in paths
                if line.startswith("package:")and line.endswith("/base.apk")),None)
     if not base:raise RuntimeError("installed player base APK is unavailable")
     installed=run(["shell","sha256sum "+shlex.quote(base)],timeout=30).split()[0]
     expected=digest(apk)
     if installed!=expected:raise RuntimeError("tablet still has a different APK after installation")
-    package=run(["shell","dumpsys","package","org.majiro.player"],timeout=20)
+    package=run(["shell","dumpsys","package",PACKAGE],timeout=20)
     version=re.search(r"\bversionName=(\S+)",package)
     code=re.search(r"\bversionCode=(\d+)",package)
     if not version or not code:raise RuntimeError("installed player version could not be verified")
@@ -232,7 +233,7 @@ def main():
     available = run(["shell", "df -k /sdcard"], timeout=20).splitlines()[-1].split()
     if int(available[3]) * 1024 < total + 1024 * 1024 * 1024:
         raise RuntimeError("device free storage is below conservative payload requirement")
-    run(["shell", "am force-stop org.majiro.player"], timeout=30)
+    run(["shell", "am force-stop " + PACKAGE], timeout=30)
     completed, directories = 0, set()
     report["status"] = "transferring"
     try:

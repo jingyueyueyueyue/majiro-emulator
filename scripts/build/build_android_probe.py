@@ -41,13 +41,13 @@ def main():
                      for path in (source/"res").rglob("*")if path.is_file()}
     manifest_hash=sha256(source/"AndroidManifest.xml")
     manifest_path=source/"AndroidManifest.xml"
-    application_id="org.majiro.player"
+    application_id="com.tyranor.runtime.majiro"
     version_namespace="{http://schemas.android.com/apk/res/android}"
     if args.recovery:
         namespace="{http://schemas.android.com/apk/res/android}"
         tree=ET.parse(manifest_path);manifest=tree.getroot()
         original_id=manifest.attrib["package"]
-        application_id="org.majiro.player.recovery"
+        application_id="com.tyranor.runtime.majiro.recovery"
         manifest.set("package",application_id)
         for item in manifest.iter():
             if item.tag in("activity","service","receiver","provider","application","instrumentation"):

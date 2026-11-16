@@ -119,9 +119,9 @@ int main(){
   require(rejected,"negative dimensions rejected");
   rejected=false;try{validate_rgba(2147483647,2147483647,black);}catch(const std::runtime_error&){rejected=true;}
   require(rejected,"oversized dimensions rejected without overflow");
-  require(socket_name("org.majiro.player")=="majiro-debug","legacy socket remains compatible");
-  require(socket_name("org.majiro.player.recovery")=="majiro-debug-recovery","recovery socket isolated");
-  require(socket_name("org.majiro.player.other")!=socket_name("org.majiro.player.recovery"),"other package socket isolated");
+  require(socket_name("com.tyranor.runtime.majiro")=="majiro-debug","runtime module socket remains compatible");
+  require(socket_name("com.tyranor.runtime.majiro.recovery")=="majiro-debug-recovery","recovery socket isolated");
+  require(socket_name("com.tyranor.runtime.majiro.other")!=socket_name("com.tyranor.runtime.majiro.recovery"),"other package socket isolated");
   p.clear();
   require(!p.screen.get()&&!p.movie.get()&&p.presented==0&&p.last_error.empty(),"session cleanup clears textures and diagnostics");
   require(fake::allocations==fake::destroyed,"all allocated textures destroyed");

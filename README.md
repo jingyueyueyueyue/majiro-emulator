@@ -1,6 +1,6 @@
 # Majiro 模拟器
 
-**版本 0.4**
+**版本 0.5**
 
 一款面向 Android 手机和平板的 Majiro 引擎模拟器，让熟悉的视觉小说也能随身阅读。选择本地游戏目录后，即可读取其中的脚本、图片与音频，按原有比例呈现游戏画面。
 
@@ -18,7 +18,7 @@
 
 [Android ARM64 发布](https://github.com/jingyueyueyueyue/majiro-emulator/releases)
 
-TyranorNext 可通过 `org.majiro.player.action.LAUNCH` 启动已授权的 SAF 游戏目录。启动 Intent 的 `data` 必须是 SAF tree URI，`game_root` 指定树内文档 ID，`game_title` 提供显示标题，`protocol_version` 当前为 `1`。
+TyranorNext 会将本应用作为第三方运行时模块发现。模块包名为 `com.tyranor.runtime.majiro`，启动 action 为 `com.tyranor.runtime.action.LAUNCH`，接收 `com.tyranor.runtime.extra.FOLDER_PATH`、`GAME_TITLE` 和 `PROTOCOL_VERSION`。游戏目录由模块按绝对路径读取，主 App 不传 SAF 授权、存档或设置。
 
 0.2 集中修复原版语义、图像与输入、音视频生命周期、存读档回滚和引擎配置识别，并优化字符串哈希、图像复制及特征扫描。原文／汉化资源方案已合入：启动前校验资源来源、编码和补丁完整性，隔离原文、本地汉化及在线翻译，保留并分区旧存档。
 

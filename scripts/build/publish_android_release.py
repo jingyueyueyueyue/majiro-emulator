@@ -39,7 +39,7 @@ def main():
         assert audit["status"]=="passed"and audit["source_identity"]==source_identity()
         assert not audit["source_changed_during_validation"]and not audit["test_sources_changed"]
         assert audit.get("apk",{}).get("sha256")==package["sha256"],"APK was not packaged by the validated audit"
-        assert package["application_id"]==previous["application_id"]=="org.majiro.player.recovery"
+        assert package["application_id"]==previous["application_id"]=="com.tyranor.runtime.majiro.recovery"
         assert package["version_name"]==version_name and package["version_code"]>previous["version_code"]
         apk=Path(package["apk"]);assert sha256(apk)==package["sha256"]
         assert run("tracked_diff",["git","status","--porcelain","--untracked-files=no"])==""

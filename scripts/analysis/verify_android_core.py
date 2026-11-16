@@ -28,7 +28,8 @@ def main():
 
     run("install", ["install", "-r", apk["apk"]])
     output = run("instrumentation", [
-        "shell", "am", "instrument", "-w", "-r", "org.majiro.player/.CoreInstrumentation"])
+        "shell", "am", "instrument", "-w", "-r",
+        "com.tyranor.runtime.majiro/org.majiro.player.CoreInstrumentation"])
     passed = "INSTRUMENTATION_CODE: -1" in output and "checks passed." in output
     device = {
         "model": run("model", ["shell", "getprop", "ro.product.model"]).strip(),
@@ -43,7 +44,8 @@ def main():
         "game_execution_verified": False, "evidence": str(folder),
     }
     write_json(ROOT / "reports/android_core_device_tests.json", report)
-    run("launch", ["shell", "am", "start", "-n", "org.majiro.player/.MainActivity"])
+    run("launch", ["shell", "am", "start", "-n",
+                    "com.tyranor.runtime.majiro/org.majiro.player.MainActivity"])
     print("Android native core device tests:", report["status"], device)
     if not passed:
         print(output)

@@ -10,7 +10,7 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "convert"))
 from port_common import ROOT, archive_dir, read_json, timestamp, write_json
 
-PACKAGES = ("org.majiro.player.recovery", "org.majiro.player")
+PACKAGES = ("com.tyranor.runtime.majiro.recovery", "com.tyranor.runtime.majiro")
 
 
 def main():

@@ -45,6 +45,8 @@ import tv.danmaku.ijk.media.player.IMediaPlayer;
 public final class GameBridge {
     private static Context context;
     private static Uri tree;
+    private static boolean fileMode;
+    private static File fileRoot;
     private static String rootId;
     private static String sourceIdentity;
     private static String textIdentity;
@@ -111,16 +113,25 @@ public final class GameBridge {
         DiagnosticLog.initialize(activity);
         context = activity;
         tree = Uri.parse(uri);
-        String grantedRoot=DocumentsContract.getTreeDocumentId(tree);
-        rootId=documentRoot==null||documentRoot.length()==0?grantedRoot:documentRoot;
-        if(!rootId.equals(grantedRoot)) {
-            boolean child=rootId.startsWith(grantedRoot+"/");
-            if(!child)try {
-                child=DocumentsContract.isChildDocument(activity.getContentResolver(),
-                    DocumentsContract.buildDocumentUriUsingTree(tree,grantedRoot),
-                    DocumentsContract.buildDocumentUriUsingTree(tree,rootId));
-            }catch(UnsupportedOperationException ignored){}
-            if(!child)throw new SecurityException("game root is outside the selected folder");
+        fileMode="file".equals(tree.getScheme());
+        if(fileMode) {
+            fileRoot=new File(tree.getPath()).getCanonicalFile();
+            if(!fileRoot.isDirectory()||!fileRoot.canRead())
+                throw new SecurityException("game folder is not readable");
+            rootId=fileRoot.getAbsolutePath();
+        } else {
+            fileRoot=null;
+            String grantedRoot=DocumentsContract.getTreeDocumentId(tree);
+            rootId=documentRoot==null||documentRoot.length()==0?grantedRoot:documentRoot;
+            if(!rootId.equals(grantedRoot)) {
+                boolean child=rootId.startsWith(grantedRoot+"/");
+                if(!child)try {
+                    child=DocumentsContract.isChildDocument(activity.getContentResolver(),
+                        DocumentsContract.buildDocumentUriUsingTree(tree,grantedRoot),
+                        DocumentsContract.buildDocumentUriUsingTree(tree,rootId));
+                }catch(UnsupportedOperationException ignored){}
+                if(!child)throw new SecurityException("game root is outside the selected folder");
+            }
         }
         directories.clear();
         duplicateArchives.clear();
@@ -140,7 +151,7 @@ public final class GameBridge {
                 @Override public boolean file(String path) throws Exception{return resolve(path)!=null;}
                 @Override public boolean populated(String path) throws Exception {
                     Uri directory=resolve(path);
-                    return directory!=null&&!children(DocumentsContract.getDocumentId(directory)).isEmpty();
+                    return directory!=null&&!children(documentId(directory)).isEmpty();
                 }
             });
             if(!"local".equals(launchTextMode))patchManifest=null;
@@ -160,15 +171,15 @@ public final class GameBridge {
         clipboard.addPrimaryClipChangedListener(clipboardListener);
         modalDialogs.reset();
         // Re-adding the same game through another parent grant keeps its saves.
-        String stable=tree.getAuthority()+"\n"+rootId;
+        String stable=(fileMode?fileRoot.getAbsolutePath():tree.getAuthority())+"\n"+rootId;
         android.content.SharedPreferences locations=context.getSharedPreferences("game-save-roots",0);
         String stableKey=hex(MessageDigest.getInstance("SHA-256").digest(stable.getBytes(StandardCharsets.UTF_8))).substring(0,24);
         String identity=locations.getString(stableKey,null);
         sourceIdentity=locations.getString(stableKey+"-source",stable);
         if(identity==null) {
             ArrayList<String> candidates=new ArrayList<String>();
-            candidates.add(rootId.equals(grantedRoot)?uri:uri+"\n"+rootId);
-            for(android.content.UriPermission grant:context.getContentResolver().getPersistedUriPermissions()) {
+            candidates.add(fileMode?tree.toString():(rootId.equals(DocumentsContract.getTreeDocumentId(tree))?uri:uri+"\n"+rootId));
+            if(!fileMode)for(android.content.UriPermission grant:context.getContentResolver().getPersistedUriPermissions()) {
                 Uri previous=grant.getUri();
                 try {
                     if(tree.getAuthority().equals(previous.getAuthority())&&rootId.equals(DocumentsContract.getTreeDocumentId(previous)))
@@ -259,7 +270,7 @@ public final class GameBridge {
         final boolean inspectLocal="local".equals(launchTextMode)||"auto".equals(launchTextMode);
         {
             Uri uri=resolve("patches/manifest.json");
-            if(uri!=null)try(InputStream input=context.getContentResolver().openInputStream(uri)){
+            if(uri!=null)try(InputStream input=openInput(uri)){
                 if(input==null)throw new IllegalStateException("cannot read patch manifest");
                 ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] block=new byte[4096];int count;
                 while((count=input.read(block))!=-1){
@@ -285,7 +296,7 @@ public final class GameBridge {
         for(PatchManifest.Layer layer:patches().layers){
             Uri directory=resolve(layer.directory);
             if(directory==null)throw new IllegalArgumentException("declared script layer disappeared");
-            for(String name:children(DocumentsContract.getDocumentId(directory)).keySet()){
+            for(String name:children(documentId(directory)).keySet()){
                 if(name.matches(".*\\.(mjo|cfg|env|txt)"))rows.add(layer.directory+"\t"+name);
             }
         }
@@ -296,9 +307,34 @@ public final class GameBridge {
         return text.replace('\\', '/').toLowerCase(Locale.ROOT);
     }
 
+    private static String documentId(Uri uri) {
+        return fileMode ? new File(uri.getPath()).getAbsolutePath() : DocumentsContract.getDocumentId(uri);
+    }
+
+    private static InputStream openInput(Uri uri) throws Exception {
+        return fileMode
+            ? new FileInputStream(new File(uri.getPath()))
+            : context.getContentResolver().openInputStream(uri);
+    }
+
+    private static ParcelFileDescriptor openDescriptor(Uri uri) throws Exception {
+        return fileMode
+            ? ParcelFileDescriptor.open(new File(uri.getPath()), ParcelFileDescriptor.MODE_READ_ONLY)
+            : context.getContentResolver().openFileDescriptor(uri, "r");
+    }
+
     private static HashMap<String, String> children(String id) throws Exception {
         if (directories.containsKey(id)) return directories.get(id);
         HashMap<String, String> values = new HashMap<String, String>();
+        if (fileMode) {
+            File directory = new File(id).getCanonicalFile();
+            if (!directory.isDirectory()) throw new IllegalStateException("cannot enumerate game directory");
+            File[] entries = directory.listFiles();
+            if (entries == null) throw new IllegalStateException("cannot enumerate game directory");
+            for (File entry : entries) values.put(key(entry.getName()), entry.getCanonicalPath());
+            directories.put(id, values);
+            return values;
+        }
         Uri uri = DocumentsContract.buildChildDocumentsUriUsingTree(tree, id);
         try (Cursor cursor = context.getContentResolver().query(uri, new String[] {
                 DocumentsContract.Document.COLUMN_DOCUMENT_ID,
@@ -311,6 +347,15 @@ public final class GameBridge {
     }
 
     private static Uri resolve(String path) throws Exception {
+        if (fileMode) {
+            File current = new File(fileRoot, path.replace('\\', '/')).getCanonicalFile();
+            String root = fileRoot.getCanonicalPath();
+            if (!current.getPath().equals(root) &&
+                    !current.getPath().startsWith(root + File.separator)) {
+                throw new SecurityException("parent file path");
+            }
+            return current.exists() ? Uri.fromFile(current) : null;
+        }
         String current = rootId;
         for (String component : path.replace('\\', '/').split("/")) {
             if (component.length() == 0 || component.equals(".")) continue;
@@ -339,7 +384,7 @@ public final class GameBridge {
         if(!patch.explicit){
             Uri overlay=resolve("patches/local/archives");
             ArrayList<String> names=new ArrayList<String>();
-            if(overlay!=null)for(String name:children(DocumentsContract.getDocumentId(overlay)).keySet())
+            if(overlay!=null)for(String name:children(documentId(overlay)).keySet())
                 if(name.endsWith(".arc"))names.add("patches/local/archives/"+name);
             java.util.Collections.sort(names,java.util.Collections.reverseOrder());
             localArchives.addAll(names);
@@ -358,7 +403,7 @@ public final class GameBridge {
         legacySaveIdentity=SaveMigration.legacyIdentity(sourceIdentity,legacyPaths,legacyImages,name->{
             Uri uri=resolve(name);
             if(uri==null)throw new IllegalArgumentException("legacy archive missing: "+name);
-            try(ParcelFileDescriptor fd=context.getContentResolver().openFileDescriptor(uri,"r")){
+            try(ParcelFileDescriptor fd=openDescriptor(uri)){
                 if(fd==null)throw new IllegalStateException("cannot inspect legacy archive");
                 long bytes=fd.getStatSize();
                 if(bytes<0)bytes=Os.lseek(fd.getFileDescriptor(),0,OsConstants.SEEK_END);
@@ -370,7 +415,7 @@ public final class GameBridge {
                 @Override public long size(String path) throws Exception {
                     Uri uri=resolve(path);
                     if(uri==null)return -1;
-                    try(ParcelFileDescriptor fd=context.getContentResolver().openFileDescriptor(uri,"r")){
+                    try(ParcelFileDescriptor fd=openDescriptor(uri)){
                         if(fd==null)throw new IllegalStateException("cannot open archive");
                         long length=fd.getStatSize();
                         return length>=0?length:Os.lseek(fd.getFileDescriptor(),0,OsConstants.SEEK_END);
@@ -378,7 +423,7 @@ public final class GameBridge {
                 }
                 @Override public InputStream open(String path) throws Exception {
                     Uri uri=resolve(path);
-                    return uri==null?null:context.getContentResolver().openInputStream(uri);
+                    return uri==null?null:openInput(uri);
                 }
             });
         duplicateArchives.clear();
@@ -393,7 +438,7 @@ public final class GameBridge {
             if (!name.endsWith(".arc") || name.equals("savedata.arc")) continue;
             Uri uri = resolve(name);
             if(uri==null)throw new IllegalArgumentException("declared patch archive missing: "+name);
-            ParcelFileDescriptor fd = context.getContentResolver().openFileDescriptor(uri, "r");
+            ParcelFileDescriptor fd = openDescriptor(uri);
             if (fd == null) throw new IllegalStateException("cannot open archive");
             long length = fd.getStatSize();
             if (length < 0) length = Os.lseek(fd.getFileDescriptor(), 0, OsConstants.SEEK_END);
@@ -415,7 +460,7 @@ public final class GameBridge {
             DiagnosticLog.write("archive","optional resource absent: "+name);
             return "ABSENT";
         }
-        ParcelFileDescriptor fd=context.getContentResolver().openFileDescriptor(uri,"r");
+        ParcelFileDescriptor fd=openDescriptor(uri);
         if(fd==null)throw new IllegalStateException("cannot open dynamic archive");
         try{
             long length=fd.getStatSize();
@@ -434,7 +479,7 @@ public final class GameBridge {
         for(PatchManifest.Layer layer:patches().layers){
                 String path=layer.directory;
                 Uri overlay=resolve(path);
-                if(overlay!=null)for(String name:children(DocumentsContract.getDocumentId(overlay)).keySet()){
+                if(overlay!=null)for(String name:children(documentId(overlay)).keySet()){
                     if(name.matches(".*\\.(mjo|cfg|env|txt)"))if(!names.contains(name))names.add(name);
                 }
         }
@@ -458,7 +503,7 @@ public final class GameBridge {
         for (String path : paths) {
             ByteArrayOutputStream implementation = new ByteArrayOutputStream();
             long length = 0;
-            try (InputStream input = context.getContentResolver().openInputStream(resolve(path))) {
+            try (InputStream input = openInput(resolve(path))) {
                 if (input == null) throw new IllegalStateException("cannot fingerprint game engine");
                 int count;
                 while ((count = input.read(buffer)) != -1) {
@@ -494,7 +539,7 @@ public final class GameBridge {
             name=manifest.fontDirectory+name.substring("patches/fonts".length());
         Uri uri = resolve(name);
         if (uri == null) return null;
-        try (InputStream input = context.getContentResolver().openInputStream(uri)) {
+        try (InputStream input = openInput(uri)) {
             if (input == null) return null;
             return readBounded(input);
         }
@@ -1058,7 +1103,7 @@ public final class GameBridge {
     public static String cacheMediaFile(String name) throws Exception {
         Uri uri = resolve(name);
         if (uri == null) return null;
-        try (InputStream input = context.getContentResolver().openInputStream(uri)) {
+        try (InputStream input = openInput(uri)) {
             if (input == null) throw new java.io.IOException("cannot open loose audio: " + name);
             File file = MediaCache.materialize(context.getCacheDir(), "media", name, input, -1);
             mediaFiles.put(file.getAbsolutePath(), file);
@@ -1142,7 +1187,7 @@ public final class GameBridge {
         }
     }
     private static long asfDuration(Uri uri) throws Exception {
-        try (InputStream input = context.getContentResolver().openInputStream(uri)) {
+        try (InputStream input = openInput(uri)) {
             byte[] header = exact(input, 30);
             byte[] signature = {(byte)0x30,0x26,(byte)0xb2,0x75,(byte)0x8e,0x66,(byte)0xcf,0x11,
                 (byte)0xa6,(byte)0xd9,0, (byte)0xaa,0,0x62,(byte)0xce,0x6c};
@@ -1469,5 +1514,9 @@ public final class GameBridge {
         players.clear(); mediaFiles.clear();audioCompletion.clear();audioSourcePaths.clear();
         audioLifecycle.reset();
         closeVideo();
+        fileMode=false;
+        fileRoot=null;
+        tree=null;
+        rootId=null;
     }
 }

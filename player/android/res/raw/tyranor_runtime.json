@@ -1,0 +1,8 @@
+{
+  "protocol": 1,
+  "label": "Majiro Emulator",
+  "scan": {
+    "match": "any",
+    "markers": ["majiro.env"]
+  }
+}
