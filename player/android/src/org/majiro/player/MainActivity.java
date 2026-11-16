@@ -95,6 +95,26 @@ public final class MainActivity extends Activity {
                     != ExternalLaunchContract.PROTOCOL_VERSION) {
                 throw new IllegalArgumentException("unsupported external launch protocol");
             }
+            Uri tree = request.getData();
+            if (tree != null) {
+                if (!"content".equals(tree.getScheme()) || !DocumentsContract.isTreeUri(tree)) {
+                    throw new IllegalArgumentException("a SAF tree document URI is required");
+                }
+                if ((request.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION) == 0) {
+                    throw new SecurityException("read permission for the game folder was not granted");
+                }
+                String root = resolveExternalGameRoot(request, tree);
+                Intent game = new Intent(this, GameActivity.class);
+                game.setData(tree);
+                game.setClipData(request.getClipData());
+                game.putExtra("game_tree", tree.toString());
+                game.putExtra("game_root", root);
+                game.putExtra("game_title", request.getStringExtra(ExternalLaunchContract.EXTRA_GAME_TITLE));
+                game.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+                startActivity(game);
+                finish();
+                return true;
+            }
             String folder = request.getStringExtra(ExternalLaunchContract.EXTRA_FOLDER_PATH);
             if (folder == null || folder.trim().isEmpty()) {
                 throw new IllegalArgumentException("game folder path is required");
@@ -118,6 +138,32 @@ public final class MainActivity extends Activity {
                 .show();
         }
         return true;
+    }
+
+    private String resolveExternalGameRoot(Intent request, Uri tree) {
+        String grantedRoot = DocumentsContract.getTreeDocumentId(tree);
+        String root = request.getStringExtra(ExternalLaunchContract.EXTRA_GAME_ROOT);
+        if (root == null || root.trim().isEmpty()) {
+            root = grantedRoot;
+        }
+        if (root.equals(grantedRoot) || root.startsWith(grantedRoot + "/")) {
+            return root;
+        }
+        boolean child;
+        try {
+            child = DocumentsContract.isChildDocument(
+                getContentResolver(),
+                DocumentsContract.buildDocumentUriUsingTree(tree, grantedRoot),
+                DocumentsContract.buildDocumentUriUsingTree(tree, root));
+        } catch (UnsupportedOperationException unsupported) {
+            child = false;
+        } catch (java.io.FileNotFoundException unavailable) {
+            child = false;
+        }
+        if (!child) {
+            throw new SecurityException("game root is outside the granted tree");
+        }
+        return root;
     }
 
     /* JADX INFO: renamed from: lambda$onCreate$0$org-majiro-player-MainActivity, reason: not valid java name */

@@ -18,7 +18,7 @@
 
 [Android ARM64 发布](https://github.com/jingyueyueyueyue/majiro-emulator/releases)
 
-TyranorNext 会将本应用作为第三方运行时模块发现。模块包名为 `com.tyranor.runtime.majiro`，启动 action 为 `com.tyranor.runtime.action.LAUNCH`，接收 `com.tyranor.runtime.extra.FOLDER_PATH`、`GAME_TITLE` 和 `PROTOCOL_VERSION`。游戏目录由模块按绝对路径读取，主 App 不传 SAF 授权、存档或设置。
+TyranorNext 会将本应用作为第三方运行时模块发现。模块包名为 `com.tyranor.runtime.majiro`，启动 action 为 `com.tyranor.runtime.action.LAUNCH`，接收 `com.tyranor.runtime.extra.FOLDER_PATH`、`GAME_ROOT`、`GAME_TITLE` 和 `PROTOCOL_VERSION`。本地目录使用绝对路径；SAF 共享存储目录使用 Intent.data tree URI、`GAME_ROOT` 子目录 ID 和临时只读授权。主 App 不传存档或设置。
 
 0.2 集中修复原版语义、图像与输入、音视频生命周期、存读档回滚和引擎配置识别，并优化字符串哈希、图像复制及特征扫描。原文／汉化资源方案已合入：启动前校验资源来源、编码和补丁完整性，隔离原文、本地汉化及在线翻译，保留并分区旧存档。
 

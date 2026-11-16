@@ -1,6 +1,7 @@
 """Check the public TyranorNext runtime module contract without starting an app."""
 from __future__ import annotations
 
+import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -26,6 +27,17 @@ def main() -> int:
     if main_activity.get(f"{{{ANDROID_NS}}}exported") != "true":
         raise AssertionError("MainActivity must be exported for external launch")
 
+    descriptor = json.loads(
+        (ROOT / "player/android/res/raw/tyranor_runtime.json").read_text(
+            encoding="utf-8",
+        ),
+    )
+    scan = descriptor.get("scan", {})
+    if set(scan.get("extensions", ())) != {".mjo", ".arc"}:
+        raise AssertionError("runtime scan descriptor must expose Majiro archive extensions")
+    if "majiro.env" not in scan.get("markers", ()):
+        raise AssertionError("runtime scan descriptor must keep the majiro.env marker")
+
     source = (ROOT / "player/android/src/org/majiro/player/MainActivity.java").read_text(
         encoding="utf-8",
     )
@@ -33,6 +45,12 @@ def main() -> int:
         "ExternalLaunchContract.ACTION_LAUNCH",
         "EXTRA_PROTOCOL_VERSION",
         "EXTRA_FOLDER_PATH",
+        "EXTRA_GAME_ROOT",
+        "getData",
+        "FLAG_GRANT_READ_URI_PERMISSION",
+        "setData",
+        "game_tree",
+        "game_root",
         "game_path",
         "getCanonicalFile",
         "GameActivity.class",
@@ -46,6 +64,7 @@ def main() -> int:
     for marker in (
         f'"{ACTION}"',
         '"com.tyranor.runtime.extra.FOLDER_PATH"',
+        '"com.tyranor.runtime.extra.GAME_ROOT"',
         '"com.tyranor.runtime.extra.GAME_TITLE"',
         '"com.tyranor.runtime.extra.PROTOCOL_VERSION"',
         "PROTOCOL_VERSION = 1",

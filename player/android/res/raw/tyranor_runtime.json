@@ -3,6 +3,7 @@
   "label": "Majiro Emulator",
   "scan": {
     "match": "any",
+    "extensions": [".mjo", ".arc"],
     "markers": ["majiro.env"]
   }
 }
