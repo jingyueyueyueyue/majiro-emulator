@@ -9,11 +9,13 @@
 #include <wrl/client.h>
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdint>
 #include <cmath>
 #include <cstdlib>
 #include <cwchar>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -36,6 +38,7 @@ struct Page {
 };
 static std::map<int,Page> pages;
 static std::map<int,Page> checkpoint_pages;
+static std::map<int,size_t> mask_refs;
 static bool checkpoint_active=false;
 static std::vector<std::wstring> private_fonts;
 static std::vector<uint8_t> last_presented;
@@ -104,20 +107,26 @@ static Page& get(int id) {
     auto item=pages.find(id);require(item!=pages.end(),"unknown page handle");return item->second;
 }
 static void collect_released() {
-    bool again=true;
-    while(again){
-        again=false;
-        for(auto it=pages.begin();it!=pages.end();++it){
-            if(!it->second.release_requested)continue;
-            bool used=false;
-            for(const auto& owner:pages)if(owner.second.antidata==it->first){used=true;break;}
-            if(used)continue;
-            if(it->second.owns_alpha){
-                auto alpha=pages.find(it->second.antidata);
-                if(alpha!=pages.end())alpha->second.release_requested=true;
+    mask_refs.clear();
+    std::vector<int> pending;
+    for(const auto& entry:pages){
+        if(entry.second.antidata)++mask_refs[entry.second.antidata];
+        if(entry.second.release_requested)pending.push_back(entry.first);
+    }
+    for(size_t index=0;index<pending.size();++index){
+        const int id=pending[index];
+        auto it=pages.find(id);
+        if(it==pages.end()||mask_refs[id])continue;
+        const Page page=std::move(it->second);
+        if(page.antidata&&mask_refs[page.antidata])--mask_refs[page.antidata];
+        if(page.owns_alpha&&page.antidata){
+            auto alpha=pages.find(page.antidata);
+            if(alpha!=pages.end()&&!alpha->second.release_requested){
+                alpha->second.release_requested=true;
+                pending.push_back(page.antidata);
             }
-            pages.erase(it);again=true;break;
         }
+        pages.erase(it);
     }
 }
 static uint8_t alpha_at(const Page& p,size_t pixel) {
@@ -379,6 +388,25 @@ static std::string path_arg(std::istringstream& in) {
     std::string path;std::getline(in>>std::ws,path);
     require(!path.empty() && path.find('\n')==std::string::npos,"missing/invalid path");return path;
 }
+static void parse_render_row(const std::string& row,int& page,int& sx,int& sy,int& w,int& h,
+                             double& x,double& y,double& xs,double& ys,double& angle,
+                             int& anti,int& centered) {
+    const char* cursor=row.c_str();
+    auto whitespace=[&](){while(*cursor&&std::isspace(static_cast<unsigned char>(*cursor)))++cursor;};
+    auto integer=[&](int& value){
+        whitespace();char* end=nullptr;const long parsed=std::strtol(cursor,&end,10);
+        require(end!=cursor&&parsed>=std::numeric_limits<int>::min()&&
+            parsed<=std::numeric_limits<int>::max(),"render integer row");
+        value=int(parsed);cursor=end;
+    };
+    auto real=[&](double& value){
+        whitespace();char* end=nullptr;value=std::strtod(cursor,&end);
+        require(end!=cursor,"render number row");cursor=end;
+    };
+    integer(page);integer(sx);integer(sy);integer(w);integer(h);
+    real(x);real(y);real(xs);real(ys);real(angle);integer(anti);integer(centered);
+    whitespace();require(*cursor=='\0',"render row trailing data");
+}
 static std::wstring save_path(const std::string& name){
     require(!name.empty()&&name.size()<=120&&name.front()!='.'&&
         name.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.")==std::string::npos,
@@ -484,7 +512,7 @@ static std::string run(const std::string& request) {
         return "OK";
     }
     if(op=="reset"||op=="reset_pages"){
-        pages.clear();last_presented.clear();last_width=last_height=0;
+        pages.clear();mask_refs.clear();last_presented.clear();last_width=last_height=0;
         if(op=="reset")screen_view.reset();
         return "OK";
     }
@@ -561,7 +589,8 @@ static std::string run(const std::string& request) {
     }
     if(op=="checkpoint_rollback"){
         require(checkpoint_active,"graphics checkpoint transaction missing");
-        pages=std::move(checkpoint_pages);checkpoint_pages.clear();checkpoint_active=false;return "OK";
+        pages=std::move(checkpoint_pages);checkpoint_pages.clear();mask_refs.clear();
+        checkpoint_active=false;return "OK";
     }
     if(op=="checkpoint_commit"){
         require(checkpoint_active,"graphics checkpoint transaction missing");
@@ -1265,9 +1294,8 @@ static std::string run(const std::string& request) {
         std::string row;
         while(std::getline(in,row)){
             if(row.empty())continue;
-            std::istringstream item(row);
             int page,sx,sy,w,h,anti,centered;double x,y,xs,ys,angle;
-            require(bool(item>>page>>sx>>sy>>w>>h>>x>>y>>xs>>ys>>angle>>anti>>centered),"render sprite row");
+            parse_render_row(row,page,sx,sy,w,h,x,y,xs,ys,angle,anti,centered);
             // Source transforms are float32, not capped at 128x. Inverse
             // sampling already clips work to the destination framebuffer.
             require(std::isfinite(x)&&std::isfinite(y)&&std::isfinite(xs)&&std::isfinite(ys)&&

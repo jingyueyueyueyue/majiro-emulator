@@ -174,9 +174,11 @@ public class GameSettingsOverlay{
     assert 'const int virtual_keys[]={13,27,37,38,39,40,33,34};' in host
     assert 'case SDLK_PAGEUP:code=33;break;case SDLK_PAGEDOWN:code=34;break;' in host
     injection = host[host.index('// Keep pending touchscreen actions queued'):host.index('if(cursor_warp_pending)')]
-    assert injection.index("if(!paused)") < injection.index("consumeGameButtons")
+    assert injection.index("if(!paused)") < injection.index('method("pollHost","()J")')
+    assert "const int requested=int(packed&0xffffu);" in injection
+    assert "const int keys=int((packed>>16)&0xffffu);" in injection
     assert 'if(requested||keys||window_command)++input_activity;' in injection
-    assert 'consumeWindowMenu' in injection
+    assert "window_command=int((packed>>32)&0xffffu);" in injection
     production = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
                   for path in files[-3:]}
     return {

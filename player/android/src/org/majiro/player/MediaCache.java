@@ -9,10 +9,17 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
+import java.util.HashMap;
 import java.util.Locale;
 
 /** Rebuildable, content-addressed cache files, published atomically. */
 final class MediaCache {
+    private static final class Validation {
+        final long size;
+        final long modified;
+        Validation(long size, long modified) { this.size=size; this.modified=modified; }
+    }
+    private static final HashMap<String, Validation> verified = new HashMap<String, Validation>();
     private static String hex(byte[] bytes) {
         char[] result = new char[bytes.length * 2];
         char[] digits = "0123456789abcdef".toCharArray();
@@ -40,11 +47,19 @@ final class MediaCache {
     static synchronized boolean isValid(File file, long expectedSize) throws Exception {
         String name = file.getName();
         if (expectedSize < 0 || !name.matches("[0-9a-f]{64}\\.[a-z0-9]{1,8}")) return false;
+        String path=file.getAbsolutePath();
+        long modified=file.lastModified();
+        Validation cached=verified.get(path);
+        if (cached!=null && cached.size==expectedSize && cached.modified==modified &&
+            file.isFile() && file.length()==expectedSize) return true;
         byte[] digest = new byte[32];
         for (int i = 0; i < digest.length; ++i)
             digest[i] = (byte)((Character.digit(name.charAt(i * 2), 16) << 4)
                 | Character.digit(name.charAt(i * 2 + 1), 16));
-        return matches(file, expectedSize, digest);
+        boolean valid=matches(file, expectedSize, digest);
+        if (valid) verified.put(path,new Validation(expectedSize,modified));
+        else verified.remove(path);
+        return valid;
     }
 
     static File materialize(File cacheRoot, String name, byte[] bytes) throws Exception {
@@ -87,9 +102,13 @@ final class MediaCache {
             }
             byte[] digest = hash.digest();
             File destination = new File(directory, hex(digest) + suffix);
-            if (matches(destination, copied, digest)) return destination;
+            if (matches(destination, copied, digest)) {
+                verified.put(destination.getAbsolutePath(),new Validation(copied,destination.lastModified()));
+                return destination;
+            }
             Files.move(pending.toPath(), destination.toPath(),
                     StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            verified.put(destination.getAbsolutePath(),new Validation(copied,destination.lastModified()));
             return destination;
         } finally {
             Files.deleteIfExists(pending.toPath());

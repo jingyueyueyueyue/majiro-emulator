@@ -108,7 +108,7 @@ def build(android=False):
         bridge = ROOT / "player/android/native_bridge.cpp"
         output = evidence / "libmajiro_core.so"
         args = [
-            str(clang), "--target=aarch64-linux-android26", "-std=c++20", "-O2",
+            str(clang), "--target=aarch64-linux-android26", "-std=c++20", "-O3", "-flto",
             "-fPIC", "-shared", "-static-libstdc++", "-fvisibility=hidden",
             "-Wl,-z,max-page-size=16384", "-I" + str(evidence), str(core), str(images),str(saves),
             str(story_saves),str(bridge),

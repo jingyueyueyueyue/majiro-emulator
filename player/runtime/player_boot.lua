@@ -31,6 +31,7 @@ local last_flush=0
 local last_font_quality
 local submitted_frames=0
 local last_present_reply
+local last_invalidation_state
 local system
 local vm
 local online
@@ -190,7 +191,7 @@ vm=module('runtime/majiro_vm.lua').new{
   persistent_globals=persisted.persistent_globals,persistent_changed=system.persistent_changed,
   script_loaded=system.script_loaded,resume_action=system.resume_action,
   wall_deadline=system.wall_deadline,string_ops=system.strings,text_ops=system.text,
-  line_changed=system.line_changed,
+  line_changed=system.line_changed,trace_limit=0,stats_enabled=false,
 }
 options.native_present=function()
   if not system.state.frontbuffer then return end
@@ -228,7 +229,9 @@ function PLAYER_TICK(now,event)
   -- A fresh host has no previous frame to preserve in that case. Publish the
   -- first input-ready scene without changing the source's nested draw counter.
   local bootstrap_frame=submitted_frames==0 and state.ui_waiting
-  if state.frontbuffer and(state.invalidate~=false or bootstrap_frame)then
+  local invalidation_changed=state.invalidate~=last_invalidation_state
+  if state.frontbuffer and(state.dirty or invalidation_changed or
+      (state.present_requested or 0)>(state.present_completed or 0)or bootstrap_frame)then
     system.sprites.update()
     local rows={}
     for _,id in ipairs(state.sprite_order)do
@@ -247,11 +250,13 @@ function PLAYER_TICK(now,event)
     system.presented(state.present_requested)
     state.dirty=false
   end
+  last_invalidation_state=state.invalidate
   if state.persist_dirty and now-last_flush>=2000 then
     system.saves.flush(vm);last_flush=now
   end
   return vm.status,vm.steps,state.reading_generation or 0,
-    vm:frame()and vm:frame().script.name or ''
+    vm:frame()and vm:frame().script.name or '',
+    system.next_wake and system.next_wake(vm) or 1
 end
 function PLAYER_WINDOW_MENU_RESULT()return system.state.window_menu_result or''end
 function PLAYER_SHUTDOWN()
@@ -278,7 +283,7 @@ function PLAYER_SHUTDOWN()
 end
 function PLAYER_DEBUG()
   return codec.encode{status=vm.status,steps=vm.steps,problem=vm.problem,
-    last_syscall=vm.last_syscall,trace=vm.trace,opcode_counts=vm.opcode_counts,
+    last_syscall=vm.last_syscall,trace=vm:trace_view(),opcode_counts=vm.opcode_counts,
     syscall_counts=vm.syscall_counts,reading_generation=system.state.reading_generation}
 end
 function PLAYER_STATUS()

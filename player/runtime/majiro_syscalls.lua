@@ -2,8 +2,9 @@
 local M={}
 function M.new(options)
   local state={files={},next_file=1,events={},settings={},calls={},names=options.names,
+    stats_enabled=options.stats_enabled~=false,
     pages={},next_page=1,invalidate_depth=0,invalidate=true,present_requested=0,present_completed=0,
-    graphics_journal={},preference_bindings={}}
+    graphics_journal={},graphics_journal_limit=20000,preference_bindings={}}
   -- Majiro caches a virtual timer per tick. time_accera scales that
   -- timer for ending credits; audio transport continues on wall time.
   local wall_now=options.now
@@ -23,6 +24,21 @@ function M.new(options)
     if timer.scale<=0 then return nil end
     return timer.anchor+math.ceil((value-timer.anchor-timer.offset)/timer.scale)
   end
+  local function next_wake(vm)
+    local wait=vm.waiting
+    if wait then
+      if wait.until_ms then
+        local deadline=wait.kind=='time' and wall_deadline(wait.until_ms)or wait.until_ms
+        if not deadline then return 100 end
+        return math.max(1,math.min(250,deadline-wall_now()))
+      end
+      if wait.kind=='present'or wait.kind=='yield'or wait.kind=='context'then return 1 end
+      return 100
+    end
+    if state.animation_active then return 16 end
+    if state.ui_waiting or state.reading_wait then return 100 end
+    return 1
+  end
   local raw_graphics=options.graphics
   local pixel_mutations={create=true,load=true,load8=true,alpha=true,antidata=true,copy=true,
     extcopy=true,swap=true,fill=true,extfill=true,mulfill=true,set=true,sepia=true,alphatable=true,
@@ -35,10 +51,18 @@ function M.new(options)
     if not state.restoring and type(reply)=='string'and reply:sub(1,2)=='OK'and
        pixel_mutations[request:match('^(%w+)')]then
       state.graphics_journal[#state.graphics_journal+1]=request
+      local journal_limit=state.graphics_journal_limit or 20000
+      state.graphics_journal_limit=journal_limit
+      if #state.graphics_journal>=journal_limit and state.compact_graphics_journal then
+        state.compact_graphics_journal()
+        state.graphics_journal_limit=#state.graphics_journal+20000
+      end
     end
     return reply
   end end
   local providers={}
+  local resolved_providers={}
+  local resolved_names={}
   local sprites,strings
   local function release_screen_snapshot(vm)
     if state.screen_snapshot then
@@ -1227,13 +1251,25 @@ function M.new(options)
     end
   end
   local function invoke(vm,hash,args,wants_result)
-    local name=state.names[hash]
-    local provider=providers[hash] or (name and providers[name])
+    local name=resolved_names[hash]
+    if name==nil then
+      name=state.names[hash]
+      resolved_names[hash]=name or false
+    elseif name==false then
+      name=nil
+    end
+    local provider=resolved_providers[hash]
+    if provider==nil then
+      provider=providers[hash] or (name and providers[name])
+      resolved_providers[hash]=provider or false
+    elseif provider==false then
+      provider=nil
+    end
     if not provider then
       vm:fail(string.format('unimplemented syscall %08x %s argc=%d',hash,name or '?',#args))
     end
     name=name or string.format('%08x',hash)
-    state.calls[name]=(state.calls[name] or 0)+1
+    if state.stats_enabled then state.calls[name]=(state.calls[name] or 0)+1 end
     local ok,value,deferred=pcall(provider,vm,args,wants_result)
     if not ok then
       if vm.status=='blocked' then error(value,0) end
@@ -1244,7 +1280,7 @@ function M.new(options)
   options.native_rebuild_step=function(vm)return poll(vm,{buttons=0,held_buttons=0})end
   return {invoke=invoke,state=state,providers=providers,sprites=sprites,emit=emit,
     dispatch_event=dispatch_event,window_menus=window_menus,saves=saves,dialogs=dialogs,
-    wall_deadline=wall_deadline,
+    wall_deadline=wall_deadline,next_wake=next_wake,
     resume_action=function(vm,action)
       if action.name=='console_redraw'then
         console_actions.redraw(vm,action)

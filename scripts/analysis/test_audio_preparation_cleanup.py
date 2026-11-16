@@ -21,6 +21,7 @@ package org.majiro.player;
 import java.util.*;
 public final class GameBridge {
  static String mediaError;
+ static void setMediaError(String value){mediaError=value;}
  static final HashMap<String,MediaPlayer> players=new HashMap<>(),nextPlayers=new HashMap<>();
  static final HashMap<String,Boolean> audioCompletion=new HashMap<>();
  static final HashMap<String,String> audioSourcePaths=new HashMap<>();

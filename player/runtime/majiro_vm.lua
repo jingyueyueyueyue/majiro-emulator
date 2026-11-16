@@ -3,6 +3,24 @@
 local M = {}
 local VM = {}; VM.__index = VM
 local U32 = 4294967296
+local COMPARISONS = {cle=true,clt=true,cge=true,cgt=true,ceq=true,cne=true}
+local NIBBLE_OPS={['and']={},['or']={},xor={}}
+for left=0,15 do
+  for right=0,15 do
+    local and_value,or_value,xor_value=0,0,0
+    local a,b=left,right
+    for bit=1,4 do
+      local x,y=a%2,b%2
+      if x==1 and y==1 then and_value=and_value+2^(bit-1) end
+      if x==1 or y==1 then or_value=or_value+2^(bit-1) end
+      if x~=y then xor_value=xor_value+2^(bit-1) end
+      a,b=math.floor(a/2),math.floor(b/2)
+    end
+    NIBBLE_OPS['and'][left*16+right]=and_value
+    NIBBLE_OPS['or'][left*16+right]=or_value
+    NIBBLE_OPS.xor[left*16+right]=xor_value
+  end
+end
 local function unsigned(n) return n % U32 end
 local function signed(n)
   n = unsigned(n)
@@ -12,13 +30,10 @@ end
 local function bitop(a,b,op)
   a,b=unsigned(a),unsigned(b)
   local result,power=0,1
-  for _=1,32 do
-    local x,y=a%2,b%2
-    if (op=='and' and x==1 and y==1) or
-       (op=='or' and (x==1 or y==1)) or (op=='xor' and x~=y) then
-      result=result+power
-    end
-    a,b,power=math.floor(a/2),math.floor(b/2),power*2
+  local table=NIBBLE_OPS[op]
+  for _=1,8 do
+    result=result+table[a%16*16+b%16]*power
+    a,b,power=math.floor(a/16),math.floor(b/16),power*16
   end
   return signed(result)
 end
@@ -91,6 +106,9 @@ function M.new(options)
   assert(options and options.loader and options.opcodes and options.syscall)
   local numeric_profile=options.numeric_profile or 'sse32'
   assert(numeric_profile=='sse32'or numeric_profile=='x87','unknown numeric semantics profile')
+  local trace_limit=options.trace_limit==nil and 48 or math.max(0,math.floor(options.trace_limit))
+  local trace_slots={}
+  for i=1,trace_limit do trace_slots[i]={} end
   local vm=setmetatable({
     loader=options.loader,opcodes=options.opcodes,syscall=options.syscall,
     after_init=options.after_init,
@@ -108,11 +126,39 @@ function M.new(options)
     case_string_relations=options.case_string_relations~=false,
     scripts={},functions={},libraries={},frames={},stack={},stack_types={},duplicate_functions={},load_order={},
     globals={[0]=options.persistent_globals or{},[1]={},[2]={}},hooks={},steps=0,status='ready',
-    trace={},trace_limit=48,opcode_counts={},syscall_counts={},thread_id=1,next_thread=2,
+    trace={},trace_slots=trace_slots,trace_count=0,trace_head=0,trace_limit=trace_limit,
+    stats_enabled=options.stats_enabled~=false,
+    opcode_counts={},syscall_counts={},syscall_keys={},flag_cache={},thread_id=1,next_thread=2,
     threads={},thread_order={1},schedule_cursor=0,context_generation=0,
   },VM)
   vm.threads[1]={id=1,frames=vm.frames,stack=vm.stack,stack_types=vm.stack_types,globals=vm.globals[2]}
   return vm
+end
+local function trace_buffer(vm)
+  local limit=vm.trace_limit or 0
+  if limit<=0 then return nil end
+  if #vm.trace_slots<limit then
+    for i=#vm.trace_slots+1,limit do vm.trace_slots[i]={} end
+  end
+  return limit
+end
+function VM:trace_view()
+  local result={}
+  local limit=trace_buffer(self)
+  if not limit or self.trace_count==0 then return result end
+  local count=math.min(self.trace_count,limit)
+  local first=(self.trace_head-count)%limit+1
+  for i=1,count do result[i]=self.trace_slots[(first+i-2)%limit+1] end
+  return result
+end
+function VM:flags(value)
+  local cached=self.flag_cache[value]
+  if cached then return cached end
+  cached={scope=math.floor(value/32)%8,vartype=math.floor(value/256)%8,
+    dimensions=math.floor(value/2048)%4,invert=math.floor(value/8)%4,
+    modifier=value%8}
+  self.flag_cache[value]=cached
+  return cached
 end
 function VM:save_thread()
   local t=self.threads[self.thread_id]
@@ -570,15 +616,17 @@ function VM:import_state(data)
   self.entry_script=data.entry_script or self.entry_script;self.exiting_context=data.exiting_context
   self.reset_reason=data.reset_reason
   self.context_generation=self.context_generation+1
-  self.problem=nil;self.trace={};self.current_offset=nil;self.last_syscall=nil
+  self.problem=nil;self.trace_count=0;self.trace_head=0
+  for i=1,#self.trace do self.trace[i]=nil end
+  self.current_offset=nil;self.last_syscall=nil
   local thread=self.threads[self.thread_id]
   self.frames,self.stack,self.waiting=thread.frames,thread.stack,thread.waiting
   thread.stack_types=thread.stack_types or {};self.stack_types=thread.stack_types
   self.globals[2]=thread.globals
 end
 function VM:variable(flags,hash,offset)
-  local scope=math.floor(flags/32)%8
-  local vartype=math.floor(flags/256)%8
+  local decoded=self:flags(flags)
+  local scope,vartype=decoded.scope,decoded.vartype
   if vartype>5 then self:fail('unsupported variable type '..vartype) end
   if scope==3 then
     local frame=self:frame()
@@ -601,13 +649,13 @@ function VM:slot(flags,hash,offset,element)
   local bank,key,vartype=self:variable(flags,hash,offset)
   if bank[key]==nil then
     -- Parameters and allocated locals must exist. Global defaults are typed.
-    if math.floor(flags/32)%8==3 then self:fail('unallocated local/argument '..offset) end
+    if self:flags(flags).scope==3 then self:fail('unallocated local/argument '..offset) end
     bank[key]=default(element and vartype+3 or vartype)
   end
   if element then
     local array=bank[key]
     if type(array)~='table' or array.kind~='array' then self:fail('array variable required') end
-    local dimensions=math.floor(flags/2048)%4
+    local dimensions=self:flags(flags).dimensions
     local shape=array.dims
     if array.native_dimensions and #shape==3 and dimensions>0 then
       shape={}
@@ -640,7 +688,7 @@ function VM:jump(offset)
 end
 function VM:binary(op,a,b,t)
   local result
-  local comparison=({cle=true,clt=true,cge=true,cgt=true,ceq=true,cne=true})[op]
+  local comparison=COMPARISONS[op]
   if t=='r'and comparison then
     -- Newer SSE builds compare after converting both operands to binary32;
     -- older x87 builds retain integer precision and treat unordered flags
@@ -653,7 +701,7 @@ function VM:binary(op,a,b,t)
       return op=='cne'and 1 or 0
     end
   end
-  if t=='s' and ({cle=true,clt=true,cge=true,cgt=true,ceq=true,cne=true})[op] then
+  if t=='s' and COMPARISONS[op] then
     local compare=self.string_ops and self.string_ops.compare
     if compare then a,b=compare(a,b),0 else a,b=a:lower(),b:lower() end
   end
@@ -717,9 +765,17 @@ function VM:step()
   frame.index=frame.index+1
   local name=spec[1]
   self.steps=self.steps+1
-  self.opcode_counts[name]=(self.opcode_counts[name] or 0)+1
-  self.trace[#self.trace+1]={script=frame.script.name,offset=row[1],opcode=name}
-  if #self.trace>self.trace_limit then table.remove(self.trace,1) end
+  if self.stats_enabled then
+    self.opcode_counts[name]=(self.opcode_counts[name] or 0)+1
+  end
+  local limit=trace_buffer(self)
+  if limit then
+    self.trace_head=self.trace_head%limit+1
+    local slot=self.trace_slots[self.trace_head]
+    slot.script=frame.script.name;slot.offset=row[1];slot.opcode=name
+    self.trace_count=math.min(self.trace_count+1,limit)
+    self.trace[self.trace_head]=slot
+  end
   if name=='line' then
     frame.line=row[3]>=32768 and row[3]-65536 or row[3]
     if self.line_changed then self.line_changed(self,frame)end
@@ -741,8 +797,14 @@ function VM:step()
     self:call(row[3],self:arguments(row[5]),name=='call')
   elseif name=='syscall' or name=='syscallp' then
     local args=self:arguments(row[4])
-    local key=string.format('%08x/%d/%s',row[3],row[4],name)
-    self.syscall_counts[key]=(self.syscall_counts[key] or 0)+1
+    if self.stats_enabled then
+      local key=self.syscall_keys[row]
+      if not key then
+        key=string.format('%08x/%d/%s',row[3],row[4],name)
+        self.syscall_keys[row]=key
+      end
+      self.syscall_counts[key]=(self.syscall_counts[key] or 0)+1
+    end
     self.last_syscall={hash=row[3],args=args,opcode=name}
     local value,deferred,kind=self.syscall(self,row[3],args,name=='syscall')
     if name=='syscall' and not deferred then self:push(value,kind) end
@@ -791,15 +853,15 @@ function VM:step()
       local updated=value+((modifier==1 or modifier==3)and 1 or -1)
       updated=t==1 and f32(updated)or signed(updated)
       bank[key]=updated
-      if math.floor(flags/32)%8==0 and self.persistent_changed then self.persistent_changed()end
+      if self:flags(flags).scope==0 and self.persistent_changed then self.persistent_changed()end
       if modifier<=2 then value=updated end
     end
-    local invert=math.floor(flags/8)%4
+    local invert=self:flags(flags).invert
     if invert==1 then value=t==1 and f32(-value) or signed(-value)
     elseif invert==2 and t==0 then value=bool(not truth(value))
     elseif invert==3 and t==0 then value=signed(4294967295-unsigned(value)) end
     local kind=t
-    if math.floor(flags/32)%8==3 and row[5]<=-2 and frame.arg_types then
+    if self:flags(flags).scope==3 and row[5]<=-2 and frame.arg_types then
       kind=frame.arg_types[-row[5]-1]or kind
     end
     if t==0 and(invert==2 or invert==3)then kind=0 end
@@ -842,7 +904,7 @@ function VM:step()
       expression=value;source_type=t
     end
     bank[key]=value
-    if math.floor(row[3]/32)%8==0 and self.persistent_changed then self.persistent_changed()end
+    if self:flags(row[3]).scope==0 and self.persistent_changed then self.persistent_changed()end
     local discard=name:match('^stp%.') or name:match('^stelemp%.')
     if not discard then self:push(expression,source_type) end
   elseif name=='notl' then self:push(bool(not truth(self:pop())))
@@ -902,7 +964,7 @@ function VM:step()
       ['and']=true,['or']=true})[name] then operation,t=name,'i' end
     if not operation then self:fail('unimplemented opcode '..name) end
     local b,a=self:pop(),self:pop()
-    local comparison=({cle=true,clt=true,cge=true,cgt=true,ceq=true,cne=true})[operation]
+    local comparison=COMPARISONS[operation]
     self:push(self:binary(operation,a,b,t),t=='r'and not comparison and 1 or nil)
   end
   return true

@@ -33,6 +33,14 @@ function M.install(define,state,options,graphics,providers,dispose_page)
     return value
   end
   local function update(s)
+    local old_page,old_sx,old_sy=s.page,s.sx,s.sy
+    local old_x,old_y=s.x,s.y
+    local old_anti=s.anti
+    local old_xscale,old_yscale,old_rotate=s.xscale,s.yscale,s.rotate
+    local function changed()
+      return old_page~=s.page or old_sx~=s.sx or old_sy~=s.sy or old_x~=s.x or old_y~=s.y
+        or old_anti~=s.anti or old_xscale~=s.xscale or old_yscale~=s.yscale or old_rotate~=s.rotate
+    end
     local function sequence_value(sequence,integer)
       local elapsed=math.abs(options.now()-sequence.began)
       local from=sequence.from
@@ -119,7 +127,7 @@ function M.install(define,state,options,graphics,providers,dispose_page)
       s.anti=math.floor(fade.from+(fade.to-fade.from)*progress)
       if progress==1 then s.fade=nil end
     end
-    if not s.move then return end
+    if not s.move then return changed() end
     local move=s.move
     local progress=move.duration==0 and 1 or math.min(1,math.max(0,(options.now()-move.began)/move.duration))
     local function curve(a,b)
@@ -132,6 +140,7 @@ function M.install(define,state,options,graphics,providers,dispose_page)
     s.x=trunc(move.x+(move.tx-move.x)*curve(0x40000000,0x20000000))
     s.y=trunc(move.y+(move.ty-move.y)*curve(0x10000000,0x08000000))
     if progress==1 then s.move=nil end
+    return changed()
   end
   local function create(vm,args,extended)
     assert(#args>=1 and #args<=6,'sprite_create signature')
@@ -434,7 +443,16 @@ function M.install(define,state,options,graphics,providers,dispose_page)
     end
     state.dirty=true
   end,update=function()
-    for _,s in pairs(state.sprites) do update(s) end
+    local changed=false
+    local active=false
+    for _,s in pairs(state.sprites) do
+      if update(s) then changed=true end
+      if s.move or s.fade or s.alpha_sequence or s.animation or s.tweens and next(s.tweens)
+          or s.transform_sequences and next(s.transform_sequences) then active=true end
+    end
+    state.animation_active=active
+    if changed then state.dirty=true end
+    return changed
   end,
   capture=function(vm,destination,source,exclude_script)
     -- Majiro's frontbuffer contains the composed scene, including sprites.

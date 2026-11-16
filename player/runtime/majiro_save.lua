@@ -48,6 +48,9 @@ end
 function M.install(define,state,options,providers,graphics)
   local codec=options.modules('runtime/majiro_codec.lua')
   local graphics_checkpoint=options.modules('runtime/majiro_graphics_checkpoint.lua')
+  state.compact_graphics_journal=function()
+    state.graphics_journal=graphics_checkpoint.compact(state.graphics_journal,state.pages)
+  end
   -- Installed immediately after the media, console, input and platform
   -- providers; these are their canonical empty-scene defaults.
   options.native_initial_state=codec.clone(state)

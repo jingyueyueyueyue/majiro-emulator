@@ -47,7 +47,7 @@ def main():
     sdl = ROOT / "references/player/SDL3"
     if not (lua_root / "lua.h").is_file() or not (sdl / "arm64-v8a/libSDL3.so").is_file():
         raise RuntimeError("fetch_player_dependencies.py must pass first")
-    common = ["--target=aarch64-linux-android26", "-O2", "-fPIC", "-fvisibility=hidden"]
+    common = ["--target=aarch64-linux-android26", "-O3", "-flto", "-fPIC", "-fvisibility=hidden"]
     c_sources = [p for p in lua_root.glob("*.c") if p.name not in ("lua.c", "luac.c", "print.c")]
 
     def compile_c(source):

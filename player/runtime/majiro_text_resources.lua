@@ -24,6 +24,11 @@ local function utf8(text)
   end
   return text
 end
+local function pin_text_resource(host,name)
+  if host.pin_text_resource then host.pin_text_resource(name)
+  elseif name:match('%.mjo$')then host.script(name)
+  else host.resource_text(name) end
+end
 M.utf8=utf8
 function M.data(text,name)
   utf8(text)
@@ -202,8 +207,14 @@ function M.new(mode,config,host,modules)
     local has_start=false
     for _,name in ipairs(host.text_resource_names())do
       has_start=has_start or name=='start.mjo'
-      if name:match('%.mjo$')then api.apply(host.script(name))
-      elseif name:match('%.txt$')and not api.required[name]then host.pin_text_resource(name)
+      if name:match('%.mjo$')then
+        -- Original/online scripts are parsed when the VM first loads them.
+        -- Local mode keeps full preflight so every declared patch is checked.
+        if mode=='local'then api.apply(host.script(name))
+        elseif not(host.text_resource_pinned and host.text_resource_pinned(name))then
+          pin_text_resource(host,name)
+        end
+      elseif name:match('%.txt$')and not api.required[name]then pin_text_resource(host,name)
       else utf8(host.resource_text(name))end
     end
     assert(has_start,'Original start.mjo is unavailable. Restore the original game resources before launching.')

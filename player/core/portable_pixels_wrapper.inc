@@ -4,9 +4,12 @@
 #include "page_checkpoint.hpp"
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -39,7 +42,7 @@ static Page load(const std::string& path, bool alpha, bool indexed = false) {
     } else if (!alpha) for (size_t i = 3; i < page.rgba.size(); i += 4) page.rgba[i] = 255;
     return page;
 }
-static void png(const Page& page, const std::string& path) {
+static void png(Page& page, const std::string& path) {
     // Native PNG export materializes the indexed display palette and the
     // independently attached reverse-alpha page. Raw storage is not RGBA
     // whenever either of those page representations is present.
@@ -56,10 +59,10 @@ static void png(const Page& page, const std::string& path) {
         }
         output=&rgba;
     }
-    if (path == "screen") host.present(page.w, page.h, *output);
+    if (path == "screen") host.present(page.w, page.h, std::move(*output));
     else host.png(path, page.w, page.h, *output);
 }
-static void png_fast(const Page& page, const std::string& path) { png(page, path); }
+static void png_fast(Page& page, const std::string& path) { png(page, path); }
 static std::string run(const std::string& request) {
     std::istringstream in(request);
     std::string op; in >> op;
@@ -78,7 +81,7 @@ static std::string run(const std::string& request) {
         return "OK";
     }
     if (op == "reset" || op == "reset_pages") {
-        pages.clear(); last_presented.clear(); last_width = last_height = 0;
+        pages.clear(); mask_refs.clear(); last_presented.clear(); last_width = last_height = 0;
         if (op == "reset") screen_view.reset();
         return "OK";
     }

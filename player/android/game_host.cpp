@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <limits>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -42,6 +43,7 @@ majiro::android_host::Presentation presentation;
 majiro::android_host::LuaMemory lua_memory;
 std::vector<uint8_t> screen_rgba;
 uint64_t screen_cpu_updates=0,last_render_error_log=0;
+uint64_t vm_time_us=0,present_time_us=0,jni_time_us=0,perf_frequency=0;
 bool render_paused=false;
 std::string application_id;
 std::string json_string(const std::string& text);
@@ -62,9 +64,19 @@ std::set<std::string> loose_names;
 std::map<std::string,std::string> text_snapshot;
 std::map<std::string,std::set<std::string>> text_catalog;
 std::map<std::string,std::string> archive_text_identity;
+std::map<std::string,std::string> archive_text_snapshot;
 bool text_snapshot_ready=false;
 majiro::TextSnapshotCache text_bytes;
-std::map<std::string, majiro::Image> image_cache;
+struct CachedImage {
+    majiro::Image image;
+    size_t bytes = 0;
+    uint64_t last_used = 0;
+};
+std::map<std::string, CachedImage> image_cache;
+constexpr size_t IMAGE_CACHE_BUDGET = 64u * 1024u * 1024u;
+size_t image_cache_bytes = 0;
+uint64_t image_cache_clock = 0;
+uint64_t image_cache_hits = 0, image_cache_misses = 0, image_cache_evictions = 0;
 std::map<std::string,bool> png_transparency_cache;
 std::vector<uint8_t> password;
 bool has_password = false;
@@ -84,6 +96,11 @@ std::map<int, int> physical_keys;
 bool cursor_warp_pending=false;
 SDL_Cursor* script_cursor=nullptr;
 float cursor_warp_x=0,cursor_warp_y=0;
+void clear_image_cache();
+uint64_t elapsed_us(uint64_t began) {
+    if (!perf_frequency) return 0;
+    return (SDL_GetPerformanceCounter()-began)*1000000/perf_frequency;
+}
 
 void draw_startup_splash(SDL_Renderer* target) {
     int width=0,height=0;
@@ -238,7 +255,7 @@ void rebuild_members(){
             members.emplace(key(name),Entry{index,member,name});
         }
     }
-    image_cache.clear();png_transparency_cache.clear();audio_cache.clear();
+    clear_image_cache();png_transparency_cache.clear();audio_cache.clear();
 }
 std::string resource_name(const std::string& name,const std::vector<std::string>& extensions={}){
     std::vector<std::string> candidates{name};
@@ -432,14 +449,35 @@ void discover_password() {
 }
 int picture_key(lua_State* state){
     if(lua_isnoneornil(state,1)){
-        password.clear();has_password=false;image_cache.clear();return 0;
+        password.clear();has_password=false;clear_image_cache();return 0;
     }
     auto text=argument(state,1);
     auto raw=convert(std::vector<uint8_t>(text.begin(),text.end()),"UTF-8","windows-31j");
     password.assign(raw.begin(),raw.end());has_password=true;
-    image_cache.clear();return 0;
+    clear_image_cache();return 0;
 }
 void debug(const std::string& text);
+size_t image_bytes(const majiro::Image& image) {
+    return image.rgba.size() + image.indices.size();
+}
+void clear_image_cache() {
+    image_cache.clear();
+    image_cache_bytes = 0;
+}
+void trim_image_cache(const std::string& protected_name) {
+    while (image_cache_bytes > IMAGE_CACHE_BUDGET && image_cache.size() > 1) {
+        auto candidate = image_cache.end();
+        for (auto it = image_cache.begin(); it != image_cache.end(); ++it) {
+            if (it->first == protected_name) continue;
+            if (candidate == image_cache.end() || it->second.last_used < candidate->second.last_used)
+                candidate = it;
+        }
+        if (candidate == image_cache.end()) break;
+        image_cache_bytes -= candidate->second.bytes;
+        image_cache.erase(candidate);
+        ++image_cache_evictions;
+    }
+}
 majiro::Image load_image(std::string name, bool with_alpha=false, std::set<std::string> active = {}) {
     if(name=="movie://texture"){
         need(movie_rgba.width>0&&movie_rgba.height>0&&!movie_rgba.rgba.empty(),"movie frame unavailable");
@@ -476,7 +514,12 @@ majiro::Image load_image(std::string name, bool with_alpha=false, std::set<std::
             [&](const auto& mask){return load_image(mask,false,active);});
     };
     auto cached = image_cache.find(name);
-    if (cached != image_cache.end()) return finish(cached->second);
+    if (cached != image_cache.end()) {
+        cached->second.last_used = ++image_cache_clock;
+        ++image_cache_hits;
+        return finish(cached->second.image);
+    }
+    ++image_cache_misses;
     auto bytes = read_member(name);
     const auto& original_name = name;
     auto label_hash = hash(std::vector<uint8_t>(original_name.begin(), original_name.end()));
@@ -513,8 +556,15 @@ majiro::Image load_image(std::string name, bool with_alpha=false, std::set<std::
             majiro::combine_base(image, load_image(base,false,active));
         }
     }
-    if (image_cache.size() >= 2) image_cache.erase(image_cache.begin());
-    image_cache[name] = image;
+    auto bytes_used = image_bytes(image);
+    auto existing = image_cache.find(name);
+    if (existing != image_cache.end()) {
+        image_cache_bytes -= existing->second.bytes;
+        image_cache.erase(existing);
+    }
+    image_cache.emplace(name, CachedImage{image, bytes_used, ++image_cache_clock});
+    image_cache_bytes += bytes_used;
+    trim_image_cache(name);
     return finish(std::move(image));
 }
 
@@ -644,10 +694,18 @@ int text_resource_names(lua_State* state){
     for(jsize i=0;i<env->GetArrayLength(rows);++i){
         auto item=static_cast<jstring>(env->GetObjectArrayElement(rows,i));auto name=key(native_string(item));
         env->DeleteLocalRef(item);
+        loose_names.insert(name);
         if(majiro::text_resource_member(name))names.insert(name);
     }
     env->DeleteLocalRef(rows);lua_newtable(state);int index=1;
     for(const auto& name:names){lua_pushlstring(state,name.data(),name.size());lua_rawseti(state,-2,index++);}
+    return 1;
+}
+int text_resource_pinned(lua_State* state){
+    const auto name=key(argument(state,1));
+    // Archive text is hashed while the source index is built. Loose files
+    // take precedence over archive members and still need a direct read.
+    lua_pushboolean(state,!loose_names.count(name)&&archive_text_snapshot.count(name));
     return 1;
 }
 int seal_text_resources(lua_State* state){
@@ -689,6 +747,12 @@ void pin_archive_text(int fd,const majiro::Archive& archive,const std::string& n
         auto raw=read_at(fd,member.offset,member.size);
         const auto digest=hash(raw);
         identity+=normalized+"\n"+digest+"\n";
+        // Source rows are registered highest-priority first. Keep the first
+        // digest as the effective member while retaining every alternative in
+        // text_catalog for archive checkpoint and reload validation.
+        if(!archive_text_snapshot.count(normalized))
+            archive_text_snapshot[normalized]=majiro::text_resource_stamp(
+                majiro::TextSource{scope,name+"/"+normalized},digest);
         if(!text_snapshot_ready){
             majiro::TextSource source{scope,name+"/"+normalized};
             text_catalog[normalized].insert(majiro::text_resource_stamp(source,digest));
@@ -786,7 +850,9 @@ int identity(lua_State* state) {
     std::string identity=native_string(source);env->DeleteLocalRef(source);
     need(text_snapshot_ready,"text identity requested before validation");
     identity+="\ntext-resources-v2\n"+std::string(translation_mode=="local"?"local":"original");
-    for(const auto& row:text_snapshot)identity+="\n"+row.first+"\n"+row.second;
+    auto snapshot=text_snapshot;
+    for(const auto& row:archive_text_snapshot)snapshot.emplace(row);
+    for(const auto& row:snapshot)identity+="\n"+row.first+"\n"+row.second;
     auto result = hash(std::vector<uint8_t>(identity.begin(), identity.end()));
     lua_pushstring(state, result.c_str()); return 1;
 }
@@ -1232,7 +1298,7 @@ void host_functions() {
 #define HOST(NAME) lua_pushcfunction(lua, guarded<NAME>); lua_setfield(lua, -2, #NAME)
     HOST(asset_text); HOST(game_text); HOST(resource_text); HOST(cp932);
     HOST(decode_bytes);HOST(service);HOST(translation);HOST(text_mode);HOST(patch_configuration);
-    HOST(patch_resource_names);HOST(text_resource_names);HOST(seal_text_resources);
+    HOST(patch_resource_names);HOST(text_resource_names);HOST(text_resource_pinned);HOST(seal_text_resources);
     HOST(pin_text_resource);
     HOST(encode_text);HOST(decode_text);HOST(set_text_identity);
     HOST(archive_control);
@@ -1325,6 +1391,14 @@ std::string render_stats() {
        <<",\"lua_collections\":"<<lua_memory.collections
        <<",\"lua_stack\":"<<(lua?lua_gettop(lua):0)
        <<",\"cpu_updates\":"<<screen_cpu_updates
+       <<",\"vm_us\":"<<vm_time_us
+       <<",\"present_us\":"<<present_time_us
+       <<",\"jni_us\":"<<jni_time_us
+       <<",\"image_cache_entries\":"<<image_cache.size()
+       <<",\"image_cache_bytes\":"<<image_cache_bytes
+       <<",\"image_cache_hits\":"<<image_cache_hits
+       <<",\"image_cache_misses\":"<<image_cache_misses
+       <<",\"image_cache_evictions\":"<<image_cache_evictions
        <<",\"screen_texture\":"<<(presentation.screen.get()?"true":"false")
        <<",\"screen_dirty\":"<<(presentation.screen.dirty()?"true":"false")
        <<",\"screen_uploads\":"<<presentation.screen.uploads
@@ -1361,10 +1435,10 @@ void install_pixels() {
         majiro::pixels::GlyphRaster result; result.width = data[0]; result.height = data[1];
         result.alpha.assign(data.begin() + 2, data.end()); return result;
     };
-    callbacks.present = [](int width, int height, const std::vector<uint8_t>& pixels) {
+    callbacks.present = [](int width, int height, std::vector<uint8_t> pixels) {
         majiro::android_host::validate_rgba(width,height,pixels);
         bool resized=width!=screen_width||height!=screen_height;
-        screen_rgba=pixels;screen_width=width;screen_height=height;++screen_cpu_updates;
+        screen_rgba.swap(pixels);screen_width=width;screen_height=height;++screen_cpu_updates;
         presentation.screen.changed();
         if(resized)need(SDL_SetRenderLogicalPresentation(renderer,width,height,
             SDL_LOGICAL_PRESENTATION_LETTERBOX),SDL_GetError());
@@ -1526,6 +1600,7 @@ void debug_poll(float& x, float& y, int& buttons, std::vector<int>& pressed) {
 extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** argv) {
     SDL_Window* window = nullptr;
     try {
+        perf_frequency=SDL_GetPerformanceFrequency();
         env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
         auto activity = SDL_GetAndroidActivity();
         auto activity_class = env->GetObjectClass(static_cast<jobject>(activity));
@@ -1567,7 +1642,7 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** 
         SDL_SetRenderLogicalPresentation(renderer, logical_w, logical_h, SDL_LOGICAL_PRESENTATION_LETTERBOX);
         bool quit = false, paused = false; float x = float(logical_w / 2), y = float(logical_h / 2);
         uint64_t paused_at = 0;
-        int held = 0; uint64_t last_debug = 0;
+        int held = 0; uint64_t last_debug = 0; uint16_t last_media_error_sequence = 0;
         while (!quit) {
             SDL_Event event; int buttons = 0,input_activity=0;
             std::vector<int> pressed;
@@ -1645,26 +1720,32 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** 
             // Keep pending touchscreen actions queued until the game can poll.
             int window_command=0;
             if(!paused){
-                int requested=env->CallStaticIntMethod(bridge,method("consumeGameButtons","()I"));
+                const auto jni_began=SDL_GetPerformanceCounter();
+                const auto packed=uint64_t(env->CallStaticLongMethod(bridge,method("pollHost","()J")));
                 checked_java();
-                window_command=env->CallStaticIntMethod(bridge,method("consumeWindowMenu","()I"));
-                checked_java();
+                const int requested=int(packed&0xffffu);
+                const int keys=int((packed>>16)&0xffffu);
+                window_command=int((packed>>32)&0xffffu);
+                const uint16_t error_sequence=uint16_t((packed>>48)&0xffffu);
                 buttons|=requested;
-                int keys=env->CallStaticIntMethod(bridge,method("consumeGameKeys","()I"));
-                checked_java();
                 const int virtual_keys[]={13,27,37,38,39,40,33,34};
                 for(int index=0;index<8;++index)
                     if(keys&(1<<index))pressed.push_back(virtual_keys[index]);
                 if(requested||keys||window_command)++input_activity;
+                if(error_sequence!=last_media_error_sequence){
+                    last_media_error_sequence=error_sequence;
+                    auto media_error=static_cast<jstring>(env->CallStaticObjectMethod(
+                        bridge,method("mediaError","()Ljava/lang/String;"))); checked_java();
+                    if(media_error){
+                        auto error=native_string(media_error);env->DeleteLocalRef(media_error);
+                        throw std::runtime_error(error);
+                    }
+                }
+                jni_time_us+=elapsed_us(jni_began);
             }
             if(cursor_warp_pending){x=cursor_warp_x;y=cursor_warp_y;cursor_warp_pending=false;}
             debug_poll(x, y, buttons, pressed);
             if (paused) { SDL_Delay(20); continue; }
-            auto media_error = static_cast<jstring>(env->CallStaticObjectMethod(
-                bridge, method("mediaError", "()Ljava/lang/String;"))); checked_java();
-            if (media_error) {
-                auto error = native_string(media_error); env->DeleteLocalRef(media_error); throw std::runtime_error(error);
-            }
             lua_getglobal(lua, "PLAYER_TICK");
             lua_pushnumber(lua, double(SDL_GetTicks() - began + clock_adjust));
             lua_newtable(lua); number_field(lua, "x", x); number_field(lua, "y", y);
@@ -1679,19 +1760,22 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** 
             lua_newtable(lua);
             for (auto code : pressed) { lua_pushboolean(lua, true); lua_rawseti(lua, -2, code); }
             lua_setfield(lua, -2, "pressed");
-            if (lua_pcall(lua, 2, 4, 0)) throw std::runtime_error(lua_tostring(lua, -1));
-            const char* status=lua_tostring(lua,-4);
+            const auto vm_began=SDL_GetPerformanceCounter();
+            if (lua_pcall(lua, 2, 5, 0)) throw std::runtime_error(lua_tostring(lua, -1));
+            vm_time_us+=elapsed_us(vm_began);
+            const char* status=lua_tostring(lua,-5);
             if(status&&std::strcmp(status,"finished")==0){
                 debug("game finished; returning to library");
-                lua_pop(lua,4);quit=true;break;
+                lua_pop(lua,5);quit=true;break;
             }
             if (SDL_GetTicks() - last_debug > 1500) {
                 std::ostringstream message;
-                message << "status=" << lua_tostring(lua, -4) << " steps=" << lua_tonumber(lua, -3)
-                        << " pages=" << lua_tonumber(lua, -2) << " script=" << lua_tostring(lua, -1);
+                message << "status=" << lua_tostring(lua, -5) << " steps=" << lua_tonumber(lua, -4)
+                        << " pages=" << lua_tonumber(lua, -3) << " script=" << lua_tostring(lua, -2);
                 debug(message.str()+" render="+render_stats()); last_debug = SDL_GetTicks();
             }
-            lua_pop(lua, 4);
+            const int next_wake=int(lua_tonumber(lua,-1));
+            lua_pop(lua, 5);
             lua_memory.tick(lua,SDL_GetTicks());
             if(window_command){
                 lua_getglobal(lua,"PLAYER_WINDOW_MENU_RESULT");
@@ -1701,6 +1785,7 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** 
                 env->DeleteLocalRef(result);checked_java();lua_pop(lua,1);
             }
             refresh_movie_frame();
+            const auto present_began=SDL_GetPerformanceCounter();
             if(!presentation.draw(renderer,screen_frame(),movie_frame(),
                     !movie_surface_active||!movie_clear_background,movie_surface_active,movie_rect)){
                 auto now=SDL_GetTicks();
@@ -1709,7 +1794,8 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** 
                     last_render_error_log=now;
                 }
             }
-            SDL_Delay(1);
+            present_time_us+=elapsed_us(present_began);
+            SDL_Delay(std::max(1,std::min(250,next_wake)));
         }
     } catch (const std::exception& error) {
         std::string message = error.what();
@@ -1731,8 +1817,8 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** 
     lua = nullptr;
     majiro::pixels::install({});
     for (const auto& source : sources) close(source.descriptor);
-    sources.clear();source_order.clear(); members.clear();loose_names.clear(); image_cache.clear();png_transparency_cache.clear(); audio_cache.clear();
-    text_snapshot.clear();text_catalog.clear();archive_text_identity.clear();text_snapshot_ready=false;
+    sources.clear();source_order.clear(); members.clear();loose_names.clear(); clear_image_cache();png_transparency_cache.clear(); audio_cache.clear();
+    text_snapshot.clear();text_catalog.clear();archive_text_identity.clear();archive_text_snapshot.clear();text_snapshot_ready=false;
     text_bytes.clear();
     password.clear();has_password=false;key_down.clear();physical_keys.clear();cursor_warp_pending=false;
     for (auto& client : debug_clients) close(client.descriptor);

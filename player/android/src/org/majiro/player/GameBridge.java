@@ -29,10 +29,13 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.nio.charset.Charset;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import tv.danmaku.ijk.media.player.IjkMediaPlayer;
@@ -54,6 +57,8 @@ public final class GameBridge {
     private static SaveMigration saveMigration;
     private static String legacySaveIdentity;
     private static volatile String mediaError;
+    private static final java.util.concurrent.atomic.AtomicInteger mediaErrorSequence=
+        new java.util.concurrent.atomic.AtomicInteger();
     private static final HashMap<String, HashMap<String, String>> directories =
         new HashMap<String, HashMap<String, String>>();
     private static final HashMap<String,String> duplicateArchives = new HashMap<String,String>();
@@ -84,6 +89,12 @@ public final class GameBridge {
     private static Typeface customTypeface;
     private static volatile int fontQualityMode=1;
     private static final HashMap<String, Typeface> privateTypefaces = new HashMap<String, Typeface>();
+    private static final LinkedHashMap<String, int[]> glyphCache =
+        new LinkedHashMap<String, int[]>(32, 0.75f, true) {
+            @Override protected boolean removeEldestEntry(Map.Entry<String, int[]> eldest) {
+                return size() > 32;
+            }
+        };
     private static String fontNameFilter = "";
     private static android.content.ClipboardManager clipboard;
     private static volatile boolean clipboardChanged;
@@ -134,10 +145,11 @@ public final class GameBridge {
             });
             if(!"local".equals(launchTextMode))patchManifest=null;
         }
-        mediaError = null;
+        setMediaError(null);
         movieState = 0;
         customTypeface = null;
         privateTypefaces.clear();
+        glyphCache.clear();
         fontNameFilter = "";
         if(clipboard!=null&&clipboardListener!=null)clipboard.removePrimaryClipChangedListener(clipboardListener);
         clipboard=(android.content.ClipboardManager)activity.getSystemService(Context.CLIPBOARD_SERVICE);
@@ -215,6 +227,14 @@ public final class GameBridge {
         GameWindowCommands.request(command);
     }
     public static int consumeWindowMenu(){return GameWindowCommands.consume();}
+    /** Pack the independent host queues so native polls them with one JNI call. */
+    public static long pollHost() {
+        long buttons=gameButtons.getAndSet(0)&0xffffL;
+        long keys=GameTouchKeys.consume()&0xffffL;
+        long menu=GameWindowCommands.consume()&0xffffL;
+        long error=mediaErrorSequence.get()&0xffffL;
+        return buttons|(keys<<16)|(menu<<32)|(error<<48);
+    }
     public static void reportWindowMenuResult(String result){
         if("queued".equals(result))return;
         Context current=context;
@@ -613,6 +633,16 @@ public final class GameBridge {
         int[] codepoints = message.codePoints().toArray();
         if(height<=0||height>4096||steps==null||(boxed?steps.length<2:steps.length!=codepoints.length))
             throw new IllegalArgumentException("invalid glyph host geometry");
+        StringBuilder cacheKeyBuilder=new StringBuilder(face.length()+message.length()+64);
+        cacheKeyBuilder.append(face).append('\0').append(height).append('\0').append(quality)
+            .append('\0').append(boxed?1:0);
+        for(int step:steps)cacheKeyBuilder.append('\0').append(step);
+        cacheKeyBuilder.append('\0').append(message);
+        String cacheKey=cacheKeyBuilder.toString();
+        synchronized(glyphCache){
+            int[] cached=glyphCache.get(cacheKey);
+            if(cached!=null)return cached;
+        }
         // Measurement and rasterization must use the same font on the first
         // call too; loading a private face after measuring changes wrapping.
         if (customTypeface == null) {
@@ -649,7 +679,7 @@ public final class GameBridge {
         int w = Math.max(1, Math.max(max, x)), h = Math.max(height, y + height);
         if ((long) w * h * quality * quality > 16 * 1024 * 1024)
             throw new IllegalStateException("glyph raster memory limit");
-        Bitmap bitmap = Bitmap.createBitmap(w * quality, h * quality, Bitmap.Config.ARGB_8888);
+        Bitmap bitmap = Bitmap.createBitmap(w * quality, h * quality, Bitmap.Config.ALPHA_8);
         Canvas canvas = new Canvas(bitmap);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
         paint.setTypeface(PatchTypography.apply(face, privateFace!=null?privateFace:
@@ -668,15 +698,19 @@ public final class GameBridge {
             canvas.restore();
         }
         int samples=quality*quality;
-        int[] source = new int[w * h * samples], result = new int[w * h + 2];
-        bitmap.getPixels(source, 0, w * quality, 0, 0, w * quality, h * quality); bitmap.recycle();
+        int scaledHeight=h*quality;
+        int rowBytes=bitmap.getRowBytes();
+        byte[] source=new byte[rowBytes*scaledHeight];
+        bitmap.copyPixelsToBuffer(ByteBuffer.wrap(source)); bitmap.recycle();
+        int[] result = new int[w * h + 2];
         result[0] = w; result[1] = h;
         for (int yy = 0; yy < h; ++yy) for (int xx = 0; xx < w; ++xx) {
             int total = 0;
             for (int sy = 0; sy < quality; ++sy) for (int sx = 0; sx < quality; ++sx)
-                total += source[(yy * quality + sy) * w * quality + xx * quality + sx] >>> 24;
+                total += source[(yy * quality + sy) * rowBytes + xx * quality + sx] & 255;
             result[2 + yy * w + xx] = (total + samples/2) / samples;
         }
+        synchronized(glyphCache){glyphCache.put(cacheKey,result);}
         return result;
     }
 
@@ -693,6 +727,9 @@ public final class GameBridge {
     }
     public static String hash(byte[] bytes) throws Exception {
         return hex(MessageDigest.getInstance("SHA-256").digest(bytes));
+    }
+    private static void setMediaError(String value) {
+        mediaError=value; mediaErrorSequence.incrementAndGet();
     }
     public static String mediaError() { return mediaError; }
     public static String modalDialog(String action, String token, int flags, String message, String caption) {
@@ -903,6 +940,7 @@ public final class GameBridge {
         File file = MediaCache.materialize(context.getCacheDir(), "private-fonts", name + ".font", bytes);
         Typeface loaded = Typeface.createFromFile(file);
         privateTypefaces.put(key(name), loaded);
+        glyphCache.clear();
         java.nio.ByteBuffer sfnt = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.BIG_ENDIAN);
         if (bytes.length >= 12 && (sfnt.getInt(0) == 0x00010000 || sfnt.getInt(0) == 0x4f54544f)) {
             int tables = sfnt.getShort(4) & 65535;
@@ -1278,7 +1316,7 @@ public final class GameBridge {
                                 audioLifecycle.seekComplete(channel, owner);
                                 owner.setOnSeekCompleteListener(null);
                             } catch (RuntimeException error) {
-                                mediaError = "audio seek completion failed: " + error;
+                                setMediaError("audio seek completion failed: " + error);
                             }
                         }
                     }
@@ -1356,7 +1394,7 @@ public final class GameBridge {
                         if(next!=null)applyVolume(next,gain,pan);
                         if(elapsed>=duration){audioFades.remove(channel);return;}
                     }catch(Exception failure){
-                        audioFades.remove(channel);mediaError="audio fade failed: "+failure;return;
+                        audioFades.remove(channel);setMediaError("audio fade failed: "+failure);return;
                     }
                 }
                 android.os.SystemClock.sleep(10);
@@ -1376,7 +1414,7 @@ public final class GameBridge {
             @Override public boolean onError(MediaPlayer failed, int what, int extra) {
                 synchronized (GameBridge.class) {
                     if (players.get(channel) == owner || nextPlayers.get(channel) == owner)
-                        mediaError = "audio decoding failed on " + channel + ": " + what + "/" + extra;
+                        setMediaError("audio decoding failed on " + channel + ": " + what + "/" + extra);
                 }
                 return true;
             }
@@ -1408,7 +1446,7 @@ public final class GameBridge {
             audioLifecycle.background();
             videoPaused = video != null && video.isPlaying();
             if (videoPaused) video.pause();
-        } catch (RuntimeException error) { mediaError = "media suspension failed: " + error; close(); }
+        } catch (RuntimeException error) { setMediaError("media suspension failed: " + error); close(); }
     }
     public static synchronized void resume() {
         MovieTextures.resume();
@@ -1417,7 +1455,7 @@ public final class GameBridge {
         try {
             audioLifecycle.foreground();
             if (videoPaused && video != null) video.start();
-        } catch (RuntimeException error) { mediaError = "media resume failed: " + error; close(); }
+        } catch (RuntimeException error) { setMediaError("media resume failed: " + error); close(); }
         videoPaused = false;
     }
     public static synchronized void close() {

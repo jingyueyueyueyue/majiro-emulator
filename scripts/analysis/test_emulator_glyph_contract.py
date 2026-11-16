@@ -16,10 +16,11 @@ def run():
     folder.mkdir(parents=True, exist_ok=True)
     source = r"""
 package org.majiro.player;
-import java.util.*;import java.io.*;
+import java.util.*;import java.io.*;import java.nio.*;
 public class GameBridge{
  static int fontQualityMode=0;static Typeface customTypeface;
  static HashMap<String,Typeface> privateTypefaces=new HashMap<>();
+ static LinkedHashMap<String,int[]> glyphCache=new LinkedHashMap<>(32,0.75f,true);
  static class Context{File getCacheDir(){return new File(".");}}
  static Context context=new Context();
  static String key(String s){return s.toLowerCase();}
@@ -41,9 +42,10 @@ public class GameBridge{
  }
  static class Color{static final int WHITE=-1;}
  static class Bitmap{
-  static int allocations;static class Config{static final Config ARGB_8888=new Config();}
+  static int allocations;static class Config{static final Config ARGB_8888=new Config();static final Config ALPHA_8=new Config();}
   static Bitmap createBitmap(int w,int h,Config c){allocations++;return new Bitmap();}
   void getPixels(int[] d,int o,int st,int x,int y,int w,int h){}
+  int getRowBytes(){return 64;}void copyPixelsToBuffer(ByteBuffer b){}
   void recycle(){}
  }
  static class Canvas{

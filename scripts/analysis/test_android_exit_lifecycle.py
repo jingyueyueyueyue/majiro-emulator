@@ -254,7 +254,8 @@ def main():
     assert host.index("lua_close(lua)") < host.index("DeleteGlobalRef(bridge)") < host.index("bridge=nullptr;env=nullptr")
     reset_fields = ("movie_rgba={}", "movie_page=0", "movie_sequence=-1", "movie_texture_mode=false",
                     "movie_surface_active=false", "movie_clear_background=false", "screen_width=screen_height=0",
-                    "root_uri.clear()", "sources.clear()", "image_cache.clear()", "audio_cache.clear()",
+                    "root_uri.clear()", "sources.clear()", "clear_image_cache()", "audio_cache.clear()",
+                    "archive_text_snapshot.clear()",
                     "password.clear()", "key_down.clear()", "debug_clients.clear()", "patch_layers.clear()")
     cleanup = host[host.index("lua_close(lua)"): ]
     assert all(value in cleanup for value in reset_fields)
