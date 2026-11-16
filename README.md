@@ -1,6 +1,6 @@
 # Majiro 模拟器
 
-**版本 0.3**
+**版本 0.4**
 
 一款面向 Android 手机和平板的 Majiro 引擎模拟器，让熟悉的视觉小说也能随身阅读。选择本地游戏目录后，即可读取其中的脚本、图片与音频，按原有比例呈现游戏画面。
 
@@ -16,7 +16,9 @@
 - `localization/`：本地翻译输入及生成数据；`localization/player/ruri/` 保存原始补丁适配元数据，不进入公开源码包。
 - `resources/`、`reports/`、`archive/`：本地产物、验证报告和按日期归档的证据。
 
-[下载 0.3 APK（Android ARM64）](https://github.com/jingyueyueyueyue/majiro-emulator/releases/download/v0.3/Majiro-0.3-arm64-v8a.apk)
+[下载 0.4 APK（Android ARM64）](https://github.com/jingyueyueyueyue/majiro-emulator/releases/download/v0.4/Majiro-0.4-arm64-v8a.apk)
+
+TyranorNext 可通过 `org.majiro.player.action.LAUNCH` 启动已授权的 SAF 游戏目录。启动 Intent 的 `data` 必须是 SAF tree URI，`game_root` 指定树内文档 ID，`game_title` 提供显示标题，`protocol_version` 当前为 `1`。
 
 0.2 集中修复原版语义、图像与输入、音视频生命周期、存读档回滚和引擎配置识别，并优化字符串哈希、图像复制及特征扫描。原文／汉化资源方案已合入：启动前校验资源来源、编码和补丁完整性，隔离原文、本地汉化及在线翻译，保留并分区旧存档。
 

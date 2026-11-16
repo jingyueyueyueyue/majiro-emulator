@@ -1,5 +1,5 @@
 <?xml version='1.0' encoding='utf-8'?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" android:compileSdkVersion="36" android:compileSdkVersionCodename="16" package="org.majiro.player" platformBuildVersionCode="36" platformBuildVersionName="16" android:versionName="0.3" android:versionCode="21">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" android:compileSdkVersion="36" android:compileSdkVersionCodename="16" package="org.majiro.player" platformBuildVersionCode="36" platformBuildVersionName="16" android:versionName="0.4" android:versionCode="22">
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="36" /><uses-permission android:name="android.permission.SET_WALLPAPER" />
     <uses-permission android:name="android.permission.INTERNET" />
     <queries>
@@ -24,6 +24,10 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="org.majiro.player.action.LAUNCH" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
         <activity android:configChanges="orientation|screenSize" android:exported="false" android:name=".SettingsActivity" />
