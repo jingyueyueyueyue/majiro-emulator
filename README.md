@@ -22,7 +22,9 @@
 
 [Android ARM64 发布](https://github.com/jingyueyueyueyue/majiro-emulator/releases)
 
-TyranorNext 会将本应用作为第三方运行时模块发现。模块包名为 `com.tyranor.runtime.majiro`，启动 action 为 `com.tyranor.runtime.action.LAUNCH`，接收 `com.tyranor.runtime.extra.FOLDER_PATH`、`GAME_ROOT`、`GAME_TITLE` 和 `PROTOCOL_VERSION`。本地目录使用绝对路径；SAF 共享存储目录使用 Intent.data tree URI、`GAME_ROOT` 子目录 ID 和临时只读授权。主 App 不传存档或设置。
+TyranorNext 会将本应用作为第三方运行时模块发现。模块包名为 `com.tyranor.runtime.majiro`，启动 action 为 `com.tyranor.runtime.action.LAUNCH`，接收 `com.tyranor.runtime.extra.FOLDER_PATH`、`GAME_ROOT`、`GAME_TITLE` 和 `PROTOCOL_VERSION`。Tyn 只传绝对路径时，本模块优先使用 Majiro 已获授权且覆盖该目录的 SAF 授权；对支持转交授权的宿主，也接受 Intent.data tree URI、`GAME_ROOT` 子目录 ID 和临时只读授权。主 App 不传存档或设置。
+
+2026-11-18 更新：修复从 Tyn 启动时共享存储中已有汉化补丁可能因权限错误无法读取的问题。如果未向 Majiro 授权该目录，先在 Majiro 游戏库添加并授权一次。安装包可覆盖更新，版本保持 0.5。
 
 2026-11-16 更新：修正半透明填充的反向透明度语义，恢复对话框背景与按钮。补齐并强制检查 Android 视频依赖；资源元数据改为按需读取，减少归档文件名转换、静态画面重复提交和视频逐像素搬运。版本保持 0.5。此包的对话框已获实机确认，字体顶部与后续性能调优继续单独处理。
 

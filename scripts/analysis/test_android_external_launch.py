@@ -23,12 +23,15 @@ def main() -> int:
         for activity in manifest.findall("./application/activity")
         if activity.get(f"{{{ANDROID_NS}}}name") == "org.majiro.player.MainActivity"
     )
-    actions = {
-        action.get(f"{{{ANDROID_NS}}}name")
-        for action in main_activity.findall("./intent-filter/action")
+    launch_data = {
+        tuple(data.get(f"{{{ANDROID_NS}}}scheme") for data in intent_filter.findall("data"))
+        for intent_filter in main_activity.findall("intent-filter")
+        if any(action.get(f"{{{ANDROID_NS}}}name") == ACTION for action in intent_filter.findall("action"))
+        and any(category.get(f"{{{ANDROID_NS}}}name") == "android.intent.category.DEFAULT"
+                for category in intent_filter.findall("category"))
     }
-    if ACTION not in actions:
-        raise AssertionError("MainActivity does not expose the external launch action")
+    if () not in launch_data or ("content",) not in launch_data:
+        raise AssertionError("MainActivity needs separate filters for discovery/path launches and SAF launches")
     if main_activity.get(f"{{{ANDROID_NS}}}exported") != "true":
         raise AssertionError("MainActivity must be exported for external launch")
 
@@ -58,6 +61,8 @@ def main() -> int:
         "game_root",
         "game_path",
         "getCanonicalFile",
+        "ExternalLaunchTree.find(this, directory)",
+        "setGameTree(game, existing.uri, existing.documentId)",
         "GameActivity.class",
     ):
         if marker not in source:
@@ -79,8 +84,12 @@ def main() -> int:
 
     folder=archive_dir("diagnostic_launch")
     body=method(source,"private void forwardDiagnostics(")
+    tree_source=(ROOT/"player/android/src/org/majiro/player/ExternalLaunchTree.java").read_text(encoding="utf8")
+    tree_methods="\n".join(method(tree_source,signature) for signature in (
+        "static ExternalLaunchTree find(", "private static File volumeRoot(", "private static String documentFor("))
     fixture=folder/"LaunchChecks.java"
     fixture.write_text("""
+import java.io.*;
 import java.util.*;
 public class LaunchChecks {
  static class Intent {
@@ -92,7 +101,7 @@ public class LaunchChecks {
  Info info=new Info();Intent incoming=new Intent();
  Info getApplicationInfo(){return info;}Intent getIntent(){return incoming;}
  // METHOD
- public static void main(String[] args){
+ public static void main(String[] args) throws IOException {
   LaunchChecks owner=new LaunchChecks();Intent game=new Intent();
   owner.incoming.putExtra("diagnostic_save_namespace","test-isolated");
   owner.incoming.putExtra("diagnostic_mode","original");owner.forwardDiagnostics(game);
@@ -106,11 +115,108 @@ public class LaunchChecks {
   game=new Intent();owner.forwardDiagnostics(game);
   if(!game.extras.isEmpty())throw new AssertionError("invalid mode forwarded");
   System.out.println("Diagnostic launch: 4 behavior checks passed");
+  TreeChecks.run();
  }
-}""".replace("// METHOD",body),encoding="utf8")
+}
+
+final class TreeChecks {
+ static class Build { static class VERSION { static int SDK_INT=36; } }
+ static class Environment {
+  static File primary;
+  static File getExternalStorageDirectory(){return primary;}
+ }
+ record StorageVolume(String uuid,File directory) {
+  String getUuid(){return uuid;}
+  File getDirectory(){return directory;}
+ }
+ static class StorageManager {
+  List<StorageVolume> volumes=new ArrayList<>();
+  List<StorageVolume> getStorageVolumes(){return volumes;}
+ }
+ record Uri(String authority,String tree,String document) {
+  String getScheme(){return "content";}
+  String getAuthority(){return authority;}
+ }
+ record UriPermission(Uri uri,boolean read) {
+  Uri getUri(){return uri;}
+  boolean isReadPermission(){return read;}
+ }
+ record Cursor(String mime) implements AutoCloseable {
+  boolean moveToFirst(){return mime!=null;}
+  String getString(int column){return mime;}
+  public void close(){}
+ }
+ static class DocumentsContract {
+  static class Document {
+   static final String COLUMN_MIME_TYPE="mime_type",MIME_TYPE_DIR="directory";
+  }
+  static boolean isTreeUri(Uri uri){return uri.tree()!=null;}
+  static String getTreeDocumentId(Uri uri){return uri.tree();}
+  static Uri buildDocumentUriUsingTree(Uri uri,String document){return new Uri(uri.authority(),uri.tree(),document);}
+ }
+ static class ContentResolver {
+  List<UriPermission> grants=new ArrayList<>();
+  List<Uri> checked=new ArrayList<>();
+  String denied,mime=DocumentsContract.Document.MIME_TYPE_DIR;
+  List<UriPermission> getPersistedUriPermissions(){return grants;}
+  Cursor query(Uri uri,String[] projection,Object selection,Object arguments,Object sort){
+   checked.add(uri);
+   if(uri.tree().equals(denied))throw new SecurityException("expired grant");
+   return new Cursor(mime);
+  }
+ }
+ static class Context {
+  ContentResolver resolver=new ContentResolver();
+  StorageManager storage=new StorageManager();
+  ContentResolver getContentResolver(){return resolver;}
+  <T> T getSystemService(Class<T> type){return type.cast(storage);}
+ }
+ record ExternalLaunchTree(Uri uri,String documentId) {
+  private static final String AUTHORITY="com.android.externalstorage.documents";
+  // TREE_METHODS
+ }
+ static UriPermission grant(String id,boolean read){
+  return new UriPermission(new Uri(ExternalLaunchTree.AUTHORITY,id,null),read);
+ }
+ static void expect(boolean ok,String message){if(!ok)throw new AssertionError(message);}
+ static void run() throws IOException {
+  File workspace=new File(".").getCanonicalFile();
+  Environment.primary=new File(workspace,"primary");
+  String folder="Download/MajiroGames/[131129] \\u4e59\\u5973";
+  String document="primary:"+folder;
+  File game=new File(Environment.primary,folder).getCanonicalFile();
+  Context context=new Context();
+  ContentResolver resolver=context.resolver;
+  String parent="primary:Download/MajiroGames";
+  resolver.grants.add(grant(document,false));
+  resolver.grants.add(new UriPermission(new Uri("other.provider",parent,null),true));
+  resolver.grants.add(grant(parent,true));
+  ExternalLaunchTree match=ExternalLaunchTree.find(context,game);
+  expect(match!=null && match.documentId.equals(document),"wrong game SAF document ID");
+  expect(match.uri.tree().equals(parent) && resolver.checked.size()==1,"used non-readable or foreign grant");
+  expect(ExternalLaunchTree.find(context,new File(Environment.primary,"Download/MajiroGamesBackup/game"))==null
+         && resolver.checked.size()==1,"matched an unrelated sibling directory");
+  expect(ExternalLaunchTree.find(context,new File(workspace,"primary2/"+folder))==null
+         && resolver.checked.size()==1,"matched an unrelated volume");
+  resolver.grants.add(grant(document,true));resolver.denied=parent;
+  match=ExternalLaunchTree.find(context,game);
+  expect(match!=null && match.uri.tree().equals(document),"stale parent hid valid exact grant");
+  resolver.mime="application/octet-stream";
+  expect(ExternalLaunchTree.find(context,game)==null,"accepted a non-directory document");
+  resolver.grants.clear();
+  expect(ExternalLaunchTree.find(context,game)==null,"invented a grant for an unauthorized directory");
+  File sd=new File(workspace,"sd");
+  context.storage.volumes.add(new StorageVolume("1234-5678",sd));
+  resolver.grants.add(grant("1234-5678:Games",true));
+  resolver.mime=DocumentsContract.Document.MIME_TYPE_DIR;
+  match=ExternalLaunchTree.find(context,new File(sd,"Games/Title"));
+  expect(match!=null && match.documentId.equals("1234-5678:Games/Title"),"removable volume not resolved");
+  System.out.println("Persisted launch access: 8 behavior checks passed");
+ }
+}""".replace("// METHOD",body).replace("// TREE_METHODS",tree_methods),encoding="utf8")
     java=Path(read_json(ROOT/"reports/android_toolchain.json")["java"])/"bin"
     for label,command in (
-        ("compile",[str(java/"javac.exe"),"-d",str(folder),str(fixture)]),
+        ("compile",[str(java/"javac.exe"),"-encoding","UTF-8","-d",str(folder),str(fixture)]),
         ("run",[str(java/"java.exe"),"-cp",str(folder),"LaunchChecks"])):
         result=subprocess.run(command,capture_output=True,cwd=folder,timeout=30)
         (folder/(label+".txt")).write_bytes(result.stdout+result.stderr)

@@ -1,5 +1,5 @@
 <?xml version='1.0' encoding='utf-8'?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" android:compileSdkVersion="36" android:compileSdkVersionCodename="16" package="com.tyranor.runtime.majiro" platformBuildVersionCode="36" platformBuildVersionName="16" android:versionName="0.5" android:versionCode="26">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" android:compileSdkVersion="36" android:compileSdkVersionCodename="16" package="com.tyranor.runtime.majiro" platformBuildVersionCode="36" platformBuildVersionName="16" android:versionName="0.5" android:versionCode="27">
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="36" /><uses-permission android:name="android.permission.SET_WALLPAPER" />
     <uses-permission android:name="android.permission.INTERNET" />
     <queries>
@@ -29,6 +29,11 @@
             <intent-filter>
                 <action android:name="com.tyranor.runtime.action.LAUNCH" />
                 <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.tyranor.runtime.action.LAUNCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
             </intent-filter>
             <meta-data
                 android:name="com.tyranor.runtime.MANIFEST"

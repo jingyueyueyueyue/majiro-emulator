@@ -96,6 +96,7 @@ public final class MainActivity extends Activity {
                 throw new IllegalArgumentException("unsupported external launch protocol");
             }
             Uri tree = request.getData();
+            Intent game = new Intent(this, GameActivity.class);
             if (tree != null) {
                 if (!"content".equals(tree.getScheme()) || !DocumentsContract.isTreeUri(tree)) {
                     throw new IllegalArgumentException("a SAF tree document URI is required");
@@ -104,28 +105,27 @@ public final class MainActivity extends Activity {
                     throw new SecurityException("read permission for the game folder was not granted");
                 }
                 String root = resolveExternalGameRoot(request, tree);
-                Intent game = new Intent(this, GameActivity.class);
                 game.setData(tree);
                 game.setClipData(request.getClipData());
-                game.putExtra("game_tree", tree.toString());
-                game.putExtra("game_root", root);
-                game.putExtra("game_title", request.getStringExtra(ExternalLaunchContract.EXTRA_GAME_TITLE));
-                forwardDiagnostics(game);
+                setGameTree(game, tree, root);
                 game.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
-                startActivity(game);
-                finish();
-                return true;
+            } else {
+                String folder = request.getStringExtra(ExternalLaunchContract.EXTRA_FOLDER_PATH);
+                if (folder == null || !new File(folder).isAbsolute()) {
+                    throw new IllegalArgumentException("an absolute game folder path is required");
+                }
+                File directory = new File(folder).getCanonicalFile();
+                ExternalLaunchTree existing = ExternalLaunchTree.find(this, directory);
+                if (existing != null) {
+                    setGameTree(game, existing.uri, existing.documentId);
+                    DiagnosticLog.write("external-launch", "reusing persisted game directory access");
+                } else {
+                    if (!directory.isDirectory() || !directory.canRead()) {
+                        throw new SecurityException("game folder is not readable; authorize it in Majiro before launching from Tyn");
+                    }
+                    game.putExtra("game_path", directory.getPath());
+                }
             }
-            String folder = request.getStringExtra(ExternalLaunchContract.EXTRA_FOLDER_PATH);
-            if (folder == null || folder.trim().isEmpty()) {
-                throw new IllegalArgumentException("game folder path is required");
-            }
-            File directory = new File(folder).getCanonicalFile();
-            if (!directory.isDirectory() || !directory.canRead()) {
-                throw new IllegalArgumentException("game folder is not readable");
-            }
-            Intent game = new Intent(this, GameActivity.class);
-            game.putExtra("game_path", directory.getPath());
             game.putExtra("game_title", request.getStringExtra(ExternalLaunchContract.EXTRA_GAME_TITLE));
             forwardDiagnostics(game);
             startActivity(game);
@@ -140,6 +140,11 @@ public final class MainActivity extends Activity {
                 .show();
         }
         return true;
+    }
+
+    private static void setGameTree(Intent game, Uri tree, String root) {
+        game.putExtra("game_tree", tree.toString());
+        game.putExtra("game_root", root);
     }
 
     private String resolveExternalGameRoot(Intent request, Uri tree) {
