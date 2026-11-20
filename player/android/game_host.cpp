@@ -1018,6 +1018,7 @@ int resize_window(lua_State* state) {
     if(!(SDL_GetWindowFlags(window)&SDL_WINDOW_FULLSCREEN))
         need(SDL_SetWindowSize(window,width,height),SDL_GetError());
     need(SDL_SetRenderLogicalPresentation(renderer,width,height,SDL_LOGICAL_PRESENTATION_LETTERBOX),SDL_GetError());
+    presentation.redraw();
     lua_pushboolean(state,true);return 1;
 }
 int wallpaper(lua_State* state) {
@@ -1133,6 +1134,7 @@ int screen_fit(lua_State* state) {
     need(width>0&&height>0,"screen fit requires initialized game dimensions");
     need(SDL_SetRenderLogicalPresentation(renderer,width,height,
         fit?SDL_LOGICAL_PRESENTATION_LETTERBOX:SDL_LOGICAL_PRESENTATION_STRETCH),SDL_GetError());
+    presentation.redraw();
     lua_pushinteger(state,0);return 1;
 }
 int font_dialog(lua_State* state) {
@@ -1419,6 +1421,8 @@ std::string render_stats(bool detailed=true) {
        <<",\"cpu_updates\":"<<screen_cpu_updates
        <<",\"vm_us\":"<<vm_time_us
        <<",\"present_us\":"<<present_time_us
+       <<",\"compose_us\":"<<majiro::pixels::compose_us()
+       <<",\"upload_bytes\":"<<(presentation.screen.uploaded_bytes+presentation.movie.uploaded_bytes)
        <<",\"jni_us\":"<<jni_time_us
        <<",\"image_cache_entries\":"<<image_cache.size()
        <<",\"image_cache_bytes\":"<<image_cache_bytes
@@ -1461,15 +1465,18 @@ void install_pixels() {
         majiro::pixels::GlyphRaster result; result.width = data[0]; result.height = data[1];
         result.alpha.assign(data.begin() + 2, data.end()); return result;
     };
-    callbacks.present = [](int width, int height, std::vector<uint8_t> pixels) {
+    callbacks.present_frame = [](int width,int height,const std::vector<uint8_t>& pixels,bool comparable) {
         majiro::android_host::validate_rgba(width,height,pixels);
-        bool resized=width!=screen_width||height!=screen_height;
-        screen_rgba.swap(pixels);screen_width=width;screen_height=height;++screen_cpu_updates;
-        if(screen_cpu_updates==1)
-            debug("startup phase=first_frame elapsed_ms="+std::to_string(SDL_GetTicks()-startup_started));
-        presentation.screen.changed();
+        const bool resized=width!=screen_width||height!=screen_height;
         if(resized)need(SDL_SetRenderLogicalPresentation(renderer,width,height,
             SDL_LOGICAL_PRESENTATION_LETTERBOX),SDL_GetError());
+        if(comparable&&!resized){
+            if(!presentation.screen.changed_frame(width,height,screen_rgba,pixels))return false;
+        }else presentation.screen.changed();
+        screen_rgba=pixels;screen_width=width;screen_height=height;++screen_cpu_updates;
+        if(screen_cpu_updates==1)
+            debug("startup phase=first_frame elapsed_ms="+std::to_string(SDL_GetTicks()-startup_started));
+        return true;
     };
     callbacks.png = [](const std::string& path, int w, int h, const std::vector<uint8_t>& pixels) {
         std::vector<jint> values(size_t(w) * h);

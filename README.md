@@ -1,6 +1,6 @@
 # Majiro 模拟器
 
-**版本 0.5**
+**版本 0.5.1**
 
 一款面向 Android 手机和平板的 Majiro 引擎模拟器，让熟悉的视觉小说也能随身阅读。选择本地游戏目录后，即可读取其中的脚本、图片与音频，按原有比例呈现游戏画面。
 
@@ -14,6 +14,7 @@
 - `scripts/build/`、`scripts/analysis/`、`scripts/convert/`：构建、验证和格式处理。
 - `scripts/analysis/test_streaming_media.py`：大音频分块读取、缓存与小内存回归；`test_android_library_batch.py` 支持启动后持续观察及真实正文输入，使用 `--pages` 检查连续正文，逐项保存截图与日志。
 - `scripts/analysis/test_extboxfill.py`、`test_runtime_performance.py`：对话框透明遮罩、按需资源元数据、重复画面提交及视频像素传输专项，已接入集中验收。
+- `scripts/analysis/benchmark_composition.py`：在同一 Windows 主机对照安卓合成代码的整帧耗时、混合耗时和输出像素；支持传入上一版结果和 17 张游戏图。
 - `scripts/analysis/test_startup_performance.py`、`test_android_keyboard.py`：启动预检、指令查找与编码快速路径，以及平板键盘的 PC 输入语义回归；字形专项为 `test_emulator_glyph_contract.py`，实机像素检查由 `RenderInstrumentation` 执行。
 - `scripts/analysis/test_android_event_wait.py`：输入唤醒、轮询哨兵过滤及空闲休眠回归；实机批处理可用 `--profile-startup` 归档 CPU 采样，记录标题菜单和首次正文时间。
 - `scripts/analysis/test_original_text_shadow.py`、`test_original_typefaces.py`：原版阴影／描边模式、Windows 字体族别名和用户私有字体选择；`scripts/build/install_android_font.py --font 用户字体路径` 校验后将个人 MS Gothic 集合装入当前 Android 包的私有字体目录，不加入 APK。
@@ -21,6 +22,8 @@
 - `resources/`、`reports/`、`archive/`：本地产物、验证报告和按日期归档的证据。
 
 [Android ARM64 发布](https://github.com/jingyueyueyueyue/majiro-emulator/releases)
+
+0.5.1（内部版本 28）优化了全屏淡入淡出、带透明遮罩的立绘和逐行更新的对话框。ARM64 播放器使用 NEON 执行 Majiro 的整数混合，按原顺序绘制页面，沿用原版缩放采样。安卓纹理只上传首尾变化行之间的像素，渲染器重建时从保留的完整画面恢复。调试命令 `render_stats` 提供累计合成时间 `compose_us` 和实际上传字节数 `upload_bytes`。
 
 TyranorNext 会将本应用作为第三方运行时模块发现。模块包名为 `com.tyranor.runtime.majiro`，启动 action 为 `com.tyranor.runtime.action.LAUNCH`，接收 `com.tyranor.runtime.extra.FOLDER_PATH`、`GAME_ROOT`、`GAME_TITLE` 和 `PROTOCOL_VERSION`。Tyn 只传绝对路径时，本模块优先使用 Majiro 已获授权且覆盖该目录的 SAF 授权；对支持转交授权的宿主，也接受 Intent.data tree URI、`GAME_ROOT` 子目录 ID 和临时只读授权。主 App 不传存档或设置。
 

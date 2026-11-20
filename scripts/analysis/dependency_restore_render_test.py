@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FAKE_SDL = r"""
 #pragma once
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 using Uint32=uint32_t;
@@ -20,6 +21,7 @@ constexpr Uint32 SDL_EVENT_DID_ENTER_FOREGROUND=0x106,SDL_EVENT_QUIT=0x100;
 constexpr int SDL_PIXELFORMAT_RGBA32=1,SDL_TEXTUREACCESS_STREAMING=1,SDL_SCALEMODE_LINEAR=1;
 struct SDL_Renderer{};
 struct SDL_FRect{float x,y,w,h;};
+struct SDL_Rect{int x,y,w,h;};
 struct SDL_Texture{int w,h;std::vector<uint8_t> pixels;};
 namespace fake{
 enum Failure{NONE,CREATE,SCALE,UPDATE,COLOR,CLEAR,DRAW,PRESENT};
@@ -34,10 +36,16 @@ inline SDL_Texture* SDL_CreateTexture(SDL_Renderer*,int,int,int w,int h){
  if(fake::fail(fake::CREATE))return nullptr;++fake::allocations;return new SDL_Texture{w,h,{}};}
 inline void SDL_DestroyTexture(SDL_Texture* t){if(t){++fake::destroyed;delete t;}}
 inline bool SDL_SetTextureScaleMode(SDL_Texture*,int){return !fake::fail(fake::SCALE);}
-inline bool SDL_UpdateTexture(SDL_Texture* t,const void*,const void* pixels,int pitch){
+inline bool SDL_UpdateTexture(SDL_Texture* t,const SDL_Rect* rect,const void* pixels,int pitch){
  if(fake::fail(fake::UPDATE))return false;
  if(pitch!=t->w*4){fake::error="bad pitch";return false;}
- auto p=static_cast<const uint8_t*>(pixels);t->pixels.assign(p,p+size_t(t->w)*t->h*4);++fake::updates;return true;}
+ SDL_Rect area=rect?*rect:SDL_Rect{0,0,t->w,t->h};
+ if(area.x<0||area.y<0||area.w<=0||area.h<=0||area.x+area.w>t->w||area.y+area.h>t->h)return false;
+ t->pixels.resize(size_t(t->w)*t->h*4);
+ auto p=static_cast<const uint8_t*>(pixels);
+ for(int y=0;y<area.h;++y)
+  std::memcpy(t->pixels.data()+(size_t(area.y+y)*t->w+area.x)*4,p+size_t(y)*pitch,size_t(area.w)*4);
+ ++fake::updates;return true;}
 inline bool SDL_SetRenderDrawColor(SDL_Renderer*,int,int,int,int){return !fake::fail(fake::COLOR);}
 inline bool SDL_RenderClear(SDL_Renderer*){return !fake::fail(fake::CLEAR);}
 inline bool SDL_RenderTexture(SDL_Renderer*,SDL_Texture* t,const void*,const SDL_FRect*){
@@ -66,6 +74,8 @@ int main(){
   require(p.screen.uploads==1&&fake::drawn==scene,"initial CPU bytes reach texture");
   auto presented=p.presented;
   require(draw()&&p.screen.uploads==1&&p.presented==presented,"unchanged VM frame avoids upload and present");
+  p.redraw();
+  require(draw()&&p.screen.uploads==1&&p.presented==presented+1,"layout changes redraw with the existing texture");
   auto create=p.screen.creations;
   require(!p.event(SDL_EVENT_QUIT)&&p.screen.get(),"unrelated event preserves texture");
   for(auto type:{SDL_EVENT_RENDER_DEVICE_RESET,SDL_EVENT_RENDER_TARGETS_RESET,SDL_EVENT_DID_ENTER_FOREGROUND}){
@@ -83,6 +93,32 @@ int main(){
   create=p.screen.creations;
   require(p.draw(&renderer,big,{},true,false,rect)&&p.screen.creations==create+1,"dimension change recreates texture");
   require(fake::drawn==larger,"resized frame upload uses new stride");
+  auto bytes=p.screen.uploaded_bytes;
+  auto original=larger;
+  larger[34]^=77;
+  require(p.screen.changed_frame(4,4,original,larger),"one changed row detected");
+  require(p.draw(&renderer,big,{},true,false,rect)&&fake::drawn==larger&&p.screen.uploaded_bytes==bytes+16,
+          "one changed row uploaded at its true offset");
+  require(!p.screen.changed_frame(4,4,larger,larger)&&!p.screen.dirty(),"identical rows skip upload");
+  original=larger;
+  larger[17]^=91;
+  p.screen.changed_frame(4,4,original,larger);
+  original=larger;
+  larger[51]^=77;
+  p.screen.changed_frame(4,4,original,larger);
+  bytes=p.screen.uploaded_bytes;
+  require(p.draw(&renderer,big,{},true,false,rect)&&fake::drawn==larger&&p.screen.uploaded_bytes==bytes+48,
+          "multiple CPU frames before draw keep every changed row");
+  original=larger;larger[15]^=39;
+  p.screen.changed_frame(4,4,original,larger);fake::failure=fake::UPDATE;
+  require(!p.draw(&renderer,big,{},true,false,rect),"partial texture upload may fail");
+  bytes=p.screen.uploaded_bytes;
+  require(p.draw(&renderer,big,{},true,false,rect)&&fake::drawn==larger&&p.screen.uploaded_bytes==bytes+64,
+          "failed partial upload retries with the complete latest frame");
+  p.reupload();original=larger;larger[50]^=44;
+  p.screen.changed_frame(4,4,original,larger);bytes=p.screen.uploaded_bytes;
+  require(p.draw(&renderer,big,{},true,false,rect)&&fake::drawn==larger&&p.screen.uploaded_bytes==bytes+64,
+          "expose forces a full upload even with a new single-row update");
   require(draw(true)&&fake::drawn==video,"movie frame drawn over scene");
   auto movie_uploads=p.movie.uploads;
   p.event(SDL_EVENT_RENDER_DEVICE_RESET);

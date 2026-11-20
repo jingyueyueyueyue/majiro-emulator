@@ -2,6 +2,7 @@
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
@@ -27,23 +28,50 @@ class TextureCache {
     SDL_Texture* texture_ = nullptr;
     int width_ = 0, height_ = 0;
     bool dirty_ = true;
+    // A zero row count means a pending upload must restore the entire texture.
+    SDL_Rect rows_{};
 public:
-    uint64_t uploads = 0, creations = 0;
+    uint64_t uploads = 0, creations = 0, uploaded_bytes = 0;
     TextureCache() = default;
     TextureCache(const TextureCache&) = delete;
     TextureCache& operator=(const TextureCache&) = delete;
     SDL_Texture* get() const { return texture_; }
     bool dirty() const { return dirty_; }
-    void changed() { dirty_ = true; }
+    void changed() { dirty_ = true; rows_ = {}; }
+    bool changed_frame(int width, int height, const std::vector<uint8_t>& previous,
+                       const std::vector<uint8_t>& next) {
+        validate_rgba(width, height, next);
+        if (previous.size() != next.size()) { changed(); return true; }
+        const size_t pitch = size_t(width) * 4;
+        auto same_row = [&](int y) {
+            const size_t offset = size_t(y) * pitch;
+            return std::memcmp(previous.data() + offset, next.data() + offset, pitch) == 0;
+        };
+        // Search from the edges. A full-height change only inspects two rows.
+        int top = 0, bottom = height;
+        while (top < bottom && same_row(top)) ++top;
+        if (top == bottom) return false;
+        while (bottom > top + 1 && same_row(bottom - 1)) --bottom;
+        if (!texture_ || width != width_ || height != height_) changed();
+        else if (!dirty_ || rows_.h) {
+            if (dirty_) {
+                top = std::min(top, rows_.y);
+                bottom = std::max(bottom, rows_.y + rows_.h);
+            }
+            rows_ = {0, top, width, bottom - top};
+            dirty_ = true;
+        }
+        return true;
+    }
     void invalidate() {
         if (texture_) SDL_DestroyTexture(texture_);
         texture_ = nullptr;
         width_ = height_ = 0;
-        dirty_ = true;
+        changed();
     }
     void clear() {
         invalidate();
-        uploads = creations = 0;
+        uploads = creations = uploaded_bytes = 0;
     }
     bool upload(SDL_Renderer* renderer, int width, int height, const std::vector<uint8_t>& bytes,
                 const char* label, std::string& error) {
@@ -62,12 +90,15 @@ public:
             if (!SDL_SetTextureScaleMode(texture_, SDL_SCALEMODE_LINEAR))
                 return failed("SDL_SetTextureScaleMode");
             width_ = width; height_ = height;
-            dirty_ = true;
+            changed();
         }
         if (dirty_) {
-            if (!SDL_UpdateTexture(texture_, nullptr, bytes.data(), width * 4))
+            const auto* region = rows_.h ? &rows_ : nullptr;
+            const auto* pixels = bytes.data() + size_t(rows_.y) * width * 4;
+            if (!SDL_UpdateTexture(texture_, region, pixels, width * 4))
                 return failed("SDL_UpdateTexture");
             ++uploads;
+            uploaded_bytes += uint64_t(width) * (region ? region->h : height) * 4;
             dirty_ = false;
         }
         return true;
@@ -103,6 +134,7 @@ public:
         return true;
     }
     void reupload() { screen.changed(); movie.changed(); }
+    void redraw() { has_frame_ = false; }
     bool draw(SDL_Renderer* renderer, FrameView scene, FrameView video, bool show_scene,
               bool show_movie, const SDL_FRect& movie_rect) {
         ++attempts;

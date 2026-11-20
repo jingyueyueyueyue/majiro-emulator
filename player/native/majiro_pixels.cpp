@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cmath>
 #include <cstdlib>
@@ -18,12 +19,14 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 #include "../core/screen_view.hpp"
 #include "../core/page_checkpoint.hpp"
+#include "../core/pixel_blend.hpp"
 #include "../core/text_shadow.hpp"
 using Microsoft::WRL::ComPtr;
 struct Page {
@@ -43,12 +46,35 @@ static std::map<int,size_t> mask_refs;
 static bool checkpoint_active=false;
 static std::vector<std::wstring> private_fonts;
 static std::vector<uint8_t> last_presented;
+static Page composition_scratch;
+static std::string last_target;
 static int last_width=0,last_height=0;
 static uint64_t graphics_revision=0,last_composed_revision=0;
 static std::string last_composed_request;
 static majiro::screen::Frame screen_view;
 static unsigned frame_session=0;
 static std::mutex guard;
+static void reset_presentation() {
+    composition_scratch=Page{};
+    std::vector<uint8_t>().swap(last_presented);
+    last_target.clear();last_composed_request.clear();last_width=last_height=0;
+}
+static void invalidate_output(const std::string& path) {
+    if(path==last_target){last_target.clear();last_composed_request.clear();}
+}
+// Raster cost of page composition, kept apart from the host's total tick time
+// so a profile can tell VM work from pixel work. RuriPixels holds guard for the
+// whole request, so this counter needs no further synchronisation.
+static uint64_t compose_ns=0;
+struct ComposeTimer{
+    uint64_t began;
+    ComposeTimer():began(uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count())){}
+    ~ComposeTimer(){
+        compose_ns+=uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count())-began;
+    }
+};
 constexpr size_t PAGE_LIMIT=64u*1024*1024, TOTAL_LIMIT=256u*1024*1024;
 static void require(bool value,const char* why) {if(!value)throw std::runtime_error(why);}
 static void checked(HRESULT hr,const char* why) {
@@ -109,6 +135,14 @@ static Page allocate(int w,int h,bool alpha) {
 static Page& get(int id) {
     auto item=pages.find(id);require(item!=pages.end(),"unknown page handle");return item->second;
 }
+// Only the destination and its attached alpha page can be overwritten by a blit.
+static const Page& blit_source(int source,int destination,std::optional<Page>& snapshot) {
+    const Page& page=get(source);
+    const int destination_mask=get(destination).antidata;
+    if(source==destination||(destination_mask&&source==destination_mask))
+        return snapshot.emplace(page);
+    return page;
+}
 static void collect_released() {
     mask_refs.clear();
     std::vector<int> pending;
@@ -143,7 +177,7 @@ static void put(int id,Page&& value) {
 static void track_graphics_revision(const std::string& op) {
     // New operations invalidate conservatively; nested batches track their
     // individual commands. Read-only requests never change page storage.
-    if(op=="get"||op=="pixel"||op=="stats"||op=="checkpoint_export"||op=="batch"||
+    if(op=="get"||op=="pixel"||op=="stats"||op=="perf"||op=="checkpoint_export"||op=="batch"||
        op=="png"||op=="cachebmp"||op=="session"||op=="fontfile"||op=="font_dialog"||
        op=="sha256"||op.rfind("save_",0)==0||op=="render"||op=="renderfast"||
        op=="renderref"||op=="present"||op=="presentview"||op=="presentzoom")return;
@@ -240,16 +274,16 @@ static uint32_t png_crc(const uint8_t* data,size_t length){
     while(length--)crc=(crc>>8)^table[0][(crc^*data++)&255];
     return ~crc;
 }
-static void png_fast(const Page& p,const std::string& path){
+static void png_fast(int width,int height,const std::vector<uint8_t>& rgba,const std::string& path){
     // Completed screens are opaque: RGB avoids transmitting redundant alpha.
     // PNG with stored DEFLATE blocks: identical visible pixels, no expensive
     // per-frame compression. Only the last two transient images are retained.
-    const size_t row=size_t(p.w)*3,raw_size=(row+1)*p.h;
+    const size_t row=size_t(width)*3,raw_size=(row+1)*height;
     std::vector<uint8_t> raw(raw_size);
-    for(int y=0;y<p.h;++y){
+    for(int y=0;y<height;++y){
         auto* target=raw.data()+size_t(y)*(row+1)+1;
-        const auto* source=p.rgba.data()+size_t(y)*p.w*4;
-        for(int x=0;x<p.w;++x){
+        const auto* source=rgba.data()+size_t(y)*width*4;
+        for(int x=0;x<width;++x){
             target[x*3]=source[x*4];target[x*3+1]=source[x*4+1];target[x*3+2]=source[x*4+2];
         }
     }
@@ -280,7 +314,7 @@ static void png_fast(const Page& p,const std::string& path){
         output.insert(output.end(),type,type+4);output.insert(output.end(),bytes.begin(),bytes.end());
         be(output,png_crc(output.data()+start,bytes.size()+4));
     };
-    std::vector<uint8_t> header;be(header,uint32_t(p.w));be(header,uint32_t(p.h));
+    std::vector<uint8_t> header;be(header,uint32_t(width));be(header,uint32_t(height));
     header.insert(header.end(),{8,2,0,0,0});
     chunk("IHDR",header);chunk("IDAT",z);chunk("IEND",{});
     HANDLE file=CreateFileW(file_path(path).c_str(),GENERIC_WRITE,FILE_SHARE_READ,nullptr,
@@ -290,9 +324,17 @@ static void png_fast(const Page& p,const std::string& path){
     CloseHandle(file);
     require(success&&written==output.size(),"live PNG output truncated");
 }
+static bool present_rgba(int width,int height,const std::vector<uint8_t>& rgba,
+                         const std::string& path,bool comparable){
+    if(comparable&&rgba==last_presented)return false;
+    png_fast(width,height,rgba,path);
+    last_presented=rgba;
+    return true;
+}
 static void composite(Page& destination,const Page& source,int sx,int sy,int w,int h,
     double x,double y,double xs,double ys,double angle,int anti,bool centered,bool raw=false,
     int clipx=0,int clipy=0,int clipw=32768,int cliph=32768,bool allow_fast=true){
+    ComposeTimer timer;
     if(xs==0||ys==0||w<=0||h<=0||anti>=255)return;
     const int mode=raw?0:source.drawmode;
     const bool special=mode==1||mode==3||mode==4;
@@ -329,12 +371,15 @@ static void composite(Page& destination,const Page& source,int sx,int sy,int w,i
                 std::memcpy(destination.rgba.data()+to,source.rgba.data()+from,bytes);continue;
             }
             if(!special&&!raw&&!has_mask&&anti>0){
-                // Constant transparency across an unmasked row: the same
-                // integer blend, with contiguous channels for vectorization.
-                auto* out=destination.rgba.data()+to;
-                const auto* color=source.rgba.data()+from;
-                for(size_t at=0;at<bytes;++at)
-                    out[at]=uint8_t((out[at]*(anti+1)+color[at]*(256-anti))>>8);
+                majiro::raster::blend_constant(destination.rgba.data()+to,
+                    source.rgba.data()+from,bytes,unsigned(anti));
+                continue;
+            }
+            if(!special&&!raw&&has_mask&&anti>=0&&mask_pixels!=destination.rgba.data()){
+                if(mask_pixels)majiro::raster::blend_masked<true>(destination.rgba.data()+to,
+                    source.rgba.data()+from,mask_pixels+from,bytes/4,unsigned(anti));
+                else majiro::raster::blend_masked<false>(destination.rgba.data()+to,
+                    source.rgba.data()+from,nullptr,bytes/4,unsigned(anti));
                 continue;
             }
             for(int64_t xx=left;xx<right;++xx,from+=4,to+=4){
@@ -534,8 +579,9 @@ static std::string run(const std::string& request) {
         return "OK";
     }
     if(op=="reset"||op=="reset_pages"){
-        pages.clear();mask_refs.clear();last_presented.clear();last_width=last_height=0;
+        pages.clear();mask_refs.clear();reset_presentation();
         if(op=="reset")screen_view.reset();
+        compose_ns=0;
         return "OK";
     }
     if(op=="drawmode"){
@@ -1281,14 +1327,16 @@ static std::string run(const std::string& request) {
         DeleteObject(bitmap);DeleteObject(font);DeleteDC(dc);
         return "OK "+std::to_string(rw)+" "+std::to_string(rh);
     }
-    if(op=="png"){int id;require(bool(in>>id),"png arguments");png(get(id),path_arg(in));return "OK";}
+    if(op=="png"){int id;require(bool(in>>id),"png arguments");
+        auto path=path_arg(in);invalidate_output(path);png(get(id),path);return "OK";}
     if(op=="modify"){
         int source,sx,sy,sw,sh,dest,dx,dy,dw,dh;double angle,xs,ys;
         require(bool(in>>source>>sx>>sy>>sw>>sh>>dest>>dx>>dy>>dw>>dh>>angle>>xs>>ys),
             "modify arguments");
         require(std::isfinite(angle)&&std::isfinite(xs)&&std::isfinite(ys)&&std::abs(xs)<=3.4028234663852886e38&&
             std::abs(ys)<=3.4028234663852886e38&&dw>=0&&dh>=0&&dw<=32768&&dh<=32768,"modify bounds");
-        const Page frozen=get(source);
+        std::optional<Page> snapshot;
+        const Page& frozen=blit_source(source,dest,snapshot);
         composite(get(dest),frozen,sx,sy,sw,sh,dx+dw/2.0,dy+dh/2.0,xs,ys,angle,0,true,true,
             dx,dy,dw,dh);
         return "OK";
@@ -1300,7 +1348,8 @@ static std::string run(const std::string& request) {
         require(std::isfinite(x)&&std::isfinite(y)&&std::isfinite(xs)&&std::isfinite(ys)&&
             std::isfinite(angle)&&std::abs(xs)<=3.4028234663852886e38&&std::abs(ys)<=3.4028234663852886e38&&anti>=0&&anti<=255,
             "paste geometry bounds");
-        const Page source=get(page); // freeze source if pasting into its own page
+        std::optional<Page> snapshot;
+        const Page& source=blit_source(page,dest,snapshot);
         composite(get(dest),source,sx,sy,w,h,x,y,xs,ys,angle,anti,centered!=0);
         return "OK";
     }
@@ -1315,7 +1364,19 @@ static std::string run(const std::string& request) {
         if(op=="presentzoom")require(bool(in>>zoom)&&zoom>0&&zoom<=32768,"screen zoom arguments");
         std::string path;std::getline(in>>std::ws,path);
         require(!path.empty(),"render path");
-        Page result=get(base);result.antidata=0;result.owns_alpha=false;result.depth=32;
+        const Page& background=get(base);
+        Page& result=composition_scratch;
+        result.w=background.w;result.h=background.h;
+        const bool has_rows=in.peek()!=std::char_traits<char>::eof();
+        if(has_rows)result.rgba=background.rgba;
+        else{
+            // Copy RGB and flatten the completed client alpha in one pass.
+            result.rgba.resize(background.rgba.size());
+            for(size_t at=0;at<result.rgba.size();at+=4){
+                std::memcpy(result.rgba.data()+at,background.rgba.data()+at,4);
+                result.rgba[at+3]=255;
+            }
+        }
         std::string row;
         while(std::getline(in,row)){
             if(row.empty())continue;
@@ -1332,12 +1393,14 @@ static std::string run(const std::string& request) {
         // A completed Majiro screen is opaque. Page alpha is meaningful for
         // later source operations, but exporting it causes Artemis to blend
         // the already-composited screen a second time over an old frame.
-        for(size_t at=3;at<result.rgba.size();at+=4)result.rgba[at]=255;
+        if(has_rows)for(size_t at=3;at<result.rgba.size();at+=4)result.rgba[at]=255;
+        const std::vector<uint8_t>* output=&result.rgba;
         if(op=="presentview"||op=="presentzoom")
-            result.rgba=screen_view.compose(result.rgba,result.w,result.h,home_x,home_y,
+            output=&screen_view.compose(result.rgba,result.w,result.h,home_x,home_y,
                 static_cast<majiro::screen::Kind>(kind));
-        if(zoom){
-            const auto frozen=result.rgba;
+        if(zoom&&(zoom!=result.w||zoom!=result.h)){
+            // The retained, unzoomed client is independent of the output buffer.
+            result.rgba.resize(output->size());
             const int left=(result.w-zoom)/2,top=(result.h-zoom)/2;
             for(int y=0;y<result.h;++y)for(int x=0;x<result.w;++x){
                 const size_t to=(size_t(y)*result.w+x)*4;
@@ -1346,25 +1409,26 @@ static std::string run(const std::string& request) {
                 }else{
                     const int sx=int(int64_t(x-left)*result.w/zoom),sy=int(int64_t(y-top)*result.h/zoom);
                     const size_t from=(size_t(sy)*result.w+sx)*4;
-                    for(int c=0;c<3;++c)result.rgba[to+c]=frozen[from+c];
+                    std::memcpy(result.rgba.data()+to,output->data()+from,4);
                 }
                 result.rgba[to+3]=255;
             }
+            output=&result.rgba;
         }
         if(presenting){
-            if(last_width==result.w&&last_height==result.h&&last_presented==result.rgba){
-                last_composed_request=request;last_composed_revision=graphics_revision;
-                return "OK unchanged";
-            }
-            png_fast(result,path);
-            last_presented=result.rgba;last_width=result.w;last_height=result.h;
+            const bool comparable=last_target==path&&last_width==result.w&&last_height==result.h;
+            last_target.clear();last_composed_request.clear();
+            const bool changed=present_rgba(result.w,result.h,*output,path,comparable);
+            last_target=path;last_width=result.w;last_height=result.h;
             last_composed_request=request;last_composed_revision=graphics_revision;
-            return "OK changed";
+            return changed?"OK changed":"OK unchanged";
         }
-        if(op=="renderfast")png_fast(result,path);else png(result,path);
+        invalidate_output(path);
+        if(op=="renderfast")png_fast(result.w,result.h,result.rgba,path);else png(result,path);
         return "OK";
     }
     if(op=="stats"){return "OK "+std::to_string(pages.size())+" "+std::to_string(used());}
+    if(op=="perf"){return "OK "+std::to_string(compose_ns/1000);}
     throw std::runtime_error("unknown pixel operation");
 }
 extern "C" __declspec(dllexport) char* __cdecl RuriPixels(const char* input) {

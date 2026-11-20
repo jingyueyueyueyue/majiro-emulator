@@ -106,6 +106,52 @@ def run():
         command = "fill 2 0 0 10 10 16711680"
         api(f"batch\n{len(command)}\n{command}")
         assert api(moved)[1][20 * 4:21 * 4] == bytes((0, 0, 255, 255))
+        # The output sink can also be written by ordinary PNG/render requests.
+        # Shift right by one pixel across vector boundaries. A same-page blit
+        # must sample its original row, including its final scalar remainder.
+        source_colors = [((x * 61) & 255) + ((x * 23) & 255) * 256 for x in range(23)]
+        for operation in ("paste", "modify"):
+            for dest in (11, 12):
+                api("reset")
+                for handle in (11, 12):
+                    api(f"create {handle} 23 1 0")
+                for x, color in enumerate(source_colors):
+                    api(f"set 11 {x} 0 {color}")
+                if operation == "paste":
+                    api(f"paste {dest} 11 0 0 21 1 1 0 1 1 0 0 0")
+                else:
+                    api(f"modify 11 0 0 21 1 {dest} 1 0 21 1 0 1 1")
+                expected = source_colors.copy() if dest == 11 else [0] * 23
+                expected[1:22] = source_colors[:21]
+                assert [api(f"get {dest} {x} 0")[0] for x in range(23)] == [
+                    f"OK {color}" for color in expected], (operation, dest)
+        api("create 8 4 2 1")
+        api("create 9 4 2 0")
+        view = "presentview 8 0 0 0 screen"
+        response, black = api(view)
+        assert response == "OK changed" and black == bytes((0, 0, 0, 255)) * 8
+        assert api("pixel 8 0 0")[0] == "OK 0 0 0 0"
+        api("fill 9 0 0 4 2 255")
+        for direct in ("png 9 screen", "renderfast 9 screen", "render 9 screen"):
+            assert api(direct)[1] == bytes((255, 0, 0, 255)) * 8
+            assert api(view) == ("OK changed", black)
+        api("fill 9 0 0 1 1 0")
+        assert api(view) == ("OK unchanged", b"")  # unrelated page edit
+        for _ in range(2):
+            try:
+                api(view.replace("screen", "unavailable.png"))
+            except ValueError as exc:
+                assert "file output is unavailable" in str(exc)
+            else:
+                raise AssertionError("unchanged pixels suppressed output to a different target")
+        assert api(view) == ("OK changed", black)
+        api("create 10 2 4 0")
+        assert api("presentview 10 0 0 0 screen") == ("OK changed", black)
+        api("set 9 0 0 255")
+        api("set 9 3 1 65280")
+        response, zoom = api("presentzoom 9 0 0 0 2 screen")
+        red, dark = bytes((255, 0, 0, 255)), bytes((0, 0, 0, 255))
+        assert response == "OK changed" and zoom == (dark + red + red + dark) * 2
     finally:
         api.close()
     java_source = r"""

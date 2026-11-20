@@ -12,10 +12,13 @@ static void word(uint32_t value) { std::fwrite(&value, 4, 1, stdout); }
 int main() {
     _setmode(_fileno(stdin), _O_BINARY); _setmode(_fileno(stdout), _O_BINARY);
     std::vector<uint8_t> frame;
+    std::vector<uint8_t> displayed;
     int width = 0, height = 0;
     majiro::pixels::Host host;
-    host.present = [&](int w, int h, const std::vector<uint8_t>& pixels) {
-        width = w; height = h; frame = pixels;
+    host.present_frame = [&](int w, int h, const std::vector<uint8_t>& pixels, bool comparable) {
+        if(comparable && displayed==pixels)return false;
+        displayed=pixels;width=w;height=h;frame=displayed;
+        return true;
     };
     host.load = [](const std::string& name, bool) -> majiro::Image {
         if(!name.starts_with("fixture://"))throw std::runtime_error("unconfigured image fixture");

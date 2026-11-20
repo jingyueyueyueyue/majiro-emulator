@@ -24,15 +24,17 @@ class Frame {
     }
 public:
     void reset() { width_ = height_ = 0; std::vector<uint8_t>().swap(pixels_); }
-    const std::vector<uint8_t>& compose(const std::vector<uint8_t>& source, int width, int height,
+    const std::vector<uint8_t>& compose(std::vector<uint8_t>& source, int width, int height,
                                        int32_t home_x, int32_t home_y, Kind kind) {
         if (width <= 0 || height <= 0 || source.size() != size_t(width) * height * 4)
             throw std::runtime_error("invalid screen view source");
         if (kind != Kind::modern && kind != Kind::fixed && kind != Kind::legacy)
             throw std::runtime_error("unknown screen view profile");
-        if (source.data() == pixels_.data()) {
-            auto frozen = source;
-            return compose(frozen, width, height, home_x, home_y, kind);
+        if (home_x == 0 && home_y == 0) {
+            // Retain the unzoomed client for the next legacy border operation.
+            pixels_.swap(source);
+            width_ = width; height_ = height;
+            return pixels_;
         }
         if (width_ != width || height_ != height) {
             width_ = width; height_ = height;

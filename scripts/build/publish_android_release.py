@@ -1,4 +1,4 @@
-"""Publish a validated APK to an existing release and verify downloaded bytes."""
+"""Publish a validated APK and verify downloaded bytes against the local build."""
 from pathlib import Path
 import argparse
 import hashlib
@@ -17,7 +17,9 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo",required=True)
     parser.add_argument("--tag",required=True)
-    parser.add_argument("--expected-tag",required=True)
+    mode=parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--expected-tag",help="replace an existing release at this tag object")
+    mode.add_argument("--new-release",action="store_true",help="publish a new version and keep previous releases")
     parser.add_argument("--previous-report",type=Path,required=True)
     parser.add_argument("--notes",type=Path,required=True)
     parser.add_argument("--report",type=Path,required=True)
@@ -49,7 +51,11 @@ def main():
         remote=run("remote_refs",["git","ls-remote","origin","refs/heads/main","refs/tags/"+args.tag])
         refs=dict((line.split("\t")[1],line.split("\t")[0])for line in remote.splitlines())
         assert refs["refs/heads/main"]==commit,"push the validated source commit first"
-        assert refs["refs/tags/"+args.tag]==args.expected_tag,"release tag changed since review"
+        if args.new_release:
+            assert args.tag=="v"+version_name and args.tag!=previous_tag,"new version/tag mismatch"
+            assert "refs/tags/"+args.tag not in refs,"new release tag already exists"
+        else:
+            assert refs["refs/tags/"+args.tag]==args.expected_tag,"release tag changed since review"
         release=json.loads(run("previous_release",["gh","api","repos/"+args.repo+"/releases/tags/"+previous_tag]))
         previous_asset_name="Majiro-"+previous["version_name"]+"-arm64-v8a.apk"
         asset=next(value for value in release["assets"]if value["name"]==previous_asset_name)
@@ -67,14 +73,19 @@ def main():
         public_apk=folder/("Majiro-"+version_name+"-arm64-v8a.apk");shutil.copyfile(apk,public_apk)
         checksum=folder/"SHA256SUMS.txt"
         checksum.write_text(package["sha256"]+"  "+public_apk.name+"\n",encoding="ascii",newline="\n")
-        run("tag_local",["git","tag","-f","-a",args.tag,"-m","Majiro "+version_name,commit])
-        run("tag_push",["git","push",
-            "--force-with-lease=refs/tags/"+args.tag+":"+args.expected_tag,
-            "origin","refs/tags/"+args.tag])
-        run("upload",["gh","release","upload",args.tag,str(public_apk),str(checksum),
-            "--repo",args.repo,"--clobber"])
-        run("notes",["gh","release","edit",args.tag,"--repo",args.repo,
-            "--title","Majiro "+version_name,"--notes-file",notes_file,"--latest"])
+        if args.new_release:
+            run("publish",["gh","release","create",args.tag,str(public_apk),str(checksum),
+                "--target",commit,"--repo",args.repo,"--title","Majiro "+version_name,
+                "--notes-file",notes_file,"--latest"])
+        else:
+            run("tag_local",["git","tag","-f","-a",args.tag,"-m","Majiro "+version_name,commit])
+            run("tag_push",["git","push",
+                "--force-with-lease=refs/tags/"+args.tag+":"+args.expected_tag,
+                "origin","refs/tags/"+args.tag])
+            run("upload",["gh","release","upload",args.tag,str(public_apk),str(checksum),
+                "--repo",args.repo,"--clobber"])
+            run("notes",["gh","release","edit",args.tag,"--repo",args.repo,
+                "--title","Majiro "+version_name,"--notes-file",notes_file,"--latest"])
         published=json.loads(run("published_release",["gh","api","repos/"+args.repo+"/releases/tags/"+args.tag]))
         assert published["body"].replace("\r\n","\n").strip()==notes.replace("\r\n","\n").strip()
         live_assets={value["name"]:value for value in published["assets"]}
@@ -87,8 +98,10 @@ def main():
         for path in (public_apk,checksum):assert sha256(downloads/path.name)==sha256(path)
         for path in (public_apk,checksum):(downloads/path.name).unlink()
         downloads.rmdir()
-        remote=run("published_refs",["git","ls-remote","origin","refs/heads/main","refs/tags/"+args.tag+"^{}"])
-        assert all(line.split("\t")[0]==commit for line in remote.splitlines())
+        tag_ref="refs/tags/"+args.tag
+        remote=run("published_refs",["git","ls-remote","origin","refs/heads/main",tag_ref,tag_ref+"^{}"])
+        refs={ref:digest for digest,ref in (line.split("\t") for line in remote.splitlines())}
+        assert refs["refs/heads/main"]==commit and refs.get(tag_ref+"^{}",refs[tag_ref])==commit
         report.update(status="published_and_download_verified",completed_at=timestamp(),
             version_name=package["version_name"],version_code=package["version_code"],
             application_id=package["application_id"],commit=commit,apk=str(public_apk),

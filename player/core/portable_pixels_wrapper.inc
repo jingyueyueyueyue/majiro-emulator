@@ -2,10 +2,12 @@
 #include "portable_pixels.hpp"
 #include "screen_view.hpp"
 #include "page_checkpoint.hpp"
+#include "pixel_blend.hpp"
 #include "text_shadow.hpp"
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -13,6 +15,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -60,10 +63,23 @@ static void png(Page& page, const std::string& path) {
         }
         output=&rgba;
     }
-    if (path == "screen") host.present(page.w, page.h, std::move(*output));
+    if (path == "screen" && host.present_frame) host.present_frame(page.w, page.h, *output, false);
+    else if (path == "screen") host.present(page.w, page.h, *output);
     else host.png(path, page.w, page.h, *output);
 }
-static void png_fast(Page& page, const std::string& path) { png(page, path); }
+static void png_fast(int width,int height,const std::vector<uint8_t>& rgba,const std::string& path) {
+    if(path=="screen"&&host.present_frame)host.present_frame(width,height,rgba,false);
+    else if(path=="screen")host.present(width,height,rgba);
+    else host.png(path,width,height,rgba);
+}
+static bool present_rgba(int width,int height,const std::vector<uint8_t>& rgba,
+                         const std::string& path,bool comparable) {
+    if(path=="screen"&&host.present_frame)return host.present_frame(width,height,rgba,comparable);
+    if(comparable&&rgba==last_presented)return false;
+    png_fast(width,height,rgba,path);
+    last_presented=rgba;
+    return true;
+}
 static std::string run(const std::string& request) {
     std::istringstream in(request);
     std::string op; in >> op;
@@ -83,8 +99,9 @@ static std::string run(const std::string& request) {
         return "OK";
     }
     if (op == "reset" || op == "reset_pages") {
-        pages.clear(); mask_refs.clear(); last_presented.clear(); last_width = last_height = 0;
+        pages.clear(); mask_refs.clear(); reset_presentation();
         if (op == "reset") screen_view.reset();
+        compose_ns = 0;
         return "OK";
     }
     if (op == "drawmode") {
@@ -158,14 +175,17 @@ static std::string run(const std::string& request) {
         return "OK " + std::to_string(raster.width) + " " + std::to_string(raster.height);
     }
     if (op == "png") {
-        int id; require(bool(in >> id), "png arguments"); png(get(id), path_arg(in)); return "OK";
+        int id; require(bool(in >> id), "png arguments");
+        auto path=path_arg(in);invalidate_output(path);png(get(id),path);return "OK";
     }
     /*ADVANCED_OPERATIONS*/
 void install(Host callbacks) {
     host = std::move(callbacks); pages.clear();checkpoint_pages.clear();checkpoint_active=false;
-    last_presented.clear();last_width=last_height=0;screen_view.reset();
-    last_composed_request.clear();
+    reset_presentation();screen_view.reset();
+    compose_ns=0;
 }
+uint64_t compose_us(){return compose_ns/1000;}
+void reset_perf(){compose_ns=0;}
 std::string command(const std::string& request) {
     try { return run(request); }
     catch (const std::exception& error) { return "ERR " + std::string(error.what()); }
